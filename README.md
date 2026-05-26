@@ -1,38 +1,51 @@
 # Distripute
 
-> Distributed inference for ASR, OCR, and LLM workloads — data parallelism, model parallelism, and pipeline parallelism across a dynamic worker pool.
+> Distributed inference for ASR, OCR, and LLM workloads — data parallelism, model parallelism, and pipeline parallelism across a dynamic worker pool spanning the internet.
 
 **Architecture**
 
 ```
-                  ┌────────────────┐
-                  │   Master Node  │  ← HTTP server, scheduler, registry
-                  │  network_id    │     network_id for worker discovery
-                  └───────┬────────┘
-                          │ HTTP + JSON
-         ┌────────────────┼────────────────┐
-         ▼                ▼                ▼
-   ┌──────────┐    ┌──────────┐    ┌──────────┐
-   │ Worker 1 │    │ Worker 2 │    │ Worker 3 │  ← join via network_id
-   │ (GPU)    │    │ (CPU)    │    │ (GPU)    │     auto-download models
-   │ whisper  │    │ paddleocr│    │ vLLM     │
-   └──────────┘    └──────────┘    └──────────┘
+                         ┌──────────────┐
+                         │  Relay Node  │  ← WebSocket bridge (public VPS)
+                         │  ws://host   │     routes by network_id
+                         └──────┬───────┘
+                          ╱              ╲
+                 ┌────────▼──┐     ┌─────▼────────┐
+                 │   Master  │     │   Workers     │
+                 │ (HTTP +   │     │ (behind NAT)  │
+                 │  WebSocket)│    │ whisper/ocr   │
+                 │ network_id │     │ join via relay│
+                 └────────────┘     └──────────────┘
 ```
+
+Three connectivity modes:
+
+| Mode | Workers → Master | Use case |
+|---|---|---|
+| **Direct** | Workers connect via HTTP to master's IP:port | Same LAN, or master has public IP |
+| **Relay** | All nodes connect to relay via WebSocket | Machines across the internet (NAT) |
+| **Hybrid** | Local clients use HTTP, remote workers use relay | Mixed scenarios |
 
 ## Quick Start
 
 ```bash
-# On machine A — start master
-uv run distripute-master
+# ── On a public VPS — start relay ──
+uv run distripute-relay --host 0.0.0.0 --port 9091
+
+# ── On machine A (can be behind NAT) — start master ──
+uv run distripute-master \
+  --relay relay.example.com:9091
 # → prints: NETWORK_ID=dstr-a1b2c3d4e5
 
-# On machines B, C, D — join as workers
+# ── On machines B, C, D anywhere on the internet — join as workers ──
 uv run distripute-worker \
-  --master 192.168.1.100:9090 \
+  --relay relay.example.com:9091 \
   --network-id dstr-a1b2c3d4e5
 
-# Submit a job from any machine
+# ── Submit a job (from anywhere) ──
 distripute job create \
+  --master relay.example.com:9091 \
+  --relay \
   --type asr \
   --input ./audio_files/ \
   --output ./transcripts/ \
@@ -83,13 +96,37 @@ Use when: high latency is acceptable, need maximum model size.
 
 ## Network Discovery
 
-Workers discover and join the master using a **network ID** — a short hex token printed at master startup. The master does not require static IPs or DNS:
+Workers discover and join the master using a **network ID** — a short hex token printed at master startup.
 
-1. Start master → get `NETWORK_ID=dstr-a1b2c3d4e5`
-2. Workers join with `--network-id dstr-a1b2c3d4e5`
-3. Master validates the ID and registers the worker
-4. Workers heartbeat every 10s
-5. Workers drop off after 30s of no heartbeat
+### Direct Mode (same LAN / public IP)
+
+Workers connect directly to the master via HTTP:
+
+```
+master --port 9090
+worker --master 192.168.1.100:9090 --network-id dstr-a1b2c3d4e5
+```
+
+### Relay Mode (internet, behind NAT)
+
+A lightweight **relay server** on a publicly accessible machine bridges all connections via WebSocket. Both master and workers connect **outbound** to the relay — no port forwarding needed on any node:
+
+```
+relay --port 9091              # on a public VPS
+master --relay relay.io:9091   # behind NAT, connects outbound
+worker --relay relay.io:9091 --network-id dstr-a1b2c3d4e5  # anywhere
+```
+
+The relay routes JSON messages by network_id. It does not see task payloads — just forwards WebSocket frames between paired peers.
+
+### Flow
+
+1. Start relay → listens on `ws://host:9091`
+2. Start master → connects to relay via WebSocket, registers `network_id`
+3. Worker starts → connects to relay, requests to join `network_id`
+4. Relay bridges worker ↔ master
+5. All subsequent API calls (register, poll, result) flow through the relay
+6. Workers heartbeat every 10s; master drops workers after 30s of silence
 
 ## API Reference
 
@@ -110,9 +147,18 @@ Workers discover and join the master using a **network ID** — a short hex toke
 ### CLI
 
 ```bash
-# Create a job
+# Create a job (direct mode)
 distripute job create \
   --master localhost:9090 \
+  --type asr \
+  --input ./audio/ \
+  --output ./results/ \
+  --model whisper-large-v3
+
+# Create a job (via relay)
+distripute job create \
+  --master relay.example.com:9091 \
+  --relay \
   --type asr \
   --input ./audio/ \
   --output ./results/ \
@@ -129,6 +175,9 @@ distripute worker list --master localhost:9090
 
 # Network info
 distripute info --master localhost:9090
+
+# Start relay
+distripute relay --host 0.0.0.0 --port 9091
 ```
 
 ## Plugin System
@@ -179,18 +228,64 @@ Plugins can be written in any language. The worker spawns a persistent subproces
 
 Set via CLI flags or environment variables:
 
-| Env | Default | Description |
-|---|---|---|
-| `DISTRIPUTE_HOST` | `0.0.0.0` | Master bind address |
-| `DISTRIPUTE_PORT` | `9090` | Master port |
-| `DISTRIPUTE_LOG_LEVEL` | `INFO` | Log verbosity |
+### Master
+
+| Env | CLI flag | Default | Description |
+|---|---|---|---|
+| `DISTRIPUTE_HOST` | `--host` | `0.0.0.0` | Master HTTP bind address |
+| `DISTRIPUTE_PORT` | `--port` | `9090` | Master HTTP port |
+| `DISTRIPUTE_RELAY` | `--relay` | `""` | Relay address (host:port) for internet mode |
+| `DISTRIPUTE_LOG_LEVEL` | `--log-level` | `INFO` | Log verbosity |
+
+### Worker
+
+| Env | CLI flag | Default | Description |
+|---|---|---|---|
+| `DISTRIPUTE_MASTER` | `--master` | `""` | Master address (host:port) for direct mode |
+| `DISTRIPUTE_RELAY` | `--relay` | `""` | Relay address (host:port) for relay mode |
+| `DISTRIPUTE_NETWORK_ID` | `--network-id` | `""` | Network ID to join |
+| `DISTRIPUTE_LOG_LEVEL` | `--log-level` | `INFO` | Log verbosity |
+
+### Relay
+
+| Env | CLI flag | Default | Description |
+|---|---|---|---|
+| `DISTRIPUTE_HOST` | `--host` | `0.0.0.0` | Relay WebSocket bind address |
+| `DISTRIPUTE_PORT` | `--port` | `9091` | Relay WebSocket port |
+| `DISTRIPUTE_LOG_LEVEL` | `--log-level` | `INFO` | Log verbosity |
+
+## Comparison to Existing Systems
+
+| Feature | Petals | Ray | DeepSpeed | ColossalAI | vLLM | **Distripute** |
+|---|---|---|---|---|---|---|
+| Topology | P2P/swarm | Master-worker | Single-job | Single-job | Single-server | **Master-worker + relay** |
+| Model parallelism | Pipeline | N/A | Tensor+Pipeline | Tensor+Pipeline | Tensor+Pipeline | **Data + Model + Pipeline** |
+| Data parallelism | No | Yes | Yes | Yes | Yes | **Yes + auto model deploy** |
+| CPU support | No | Yes | Partial | Partial | No | **Yes** |
+| Cross-internet | ✅ DHT relays | ❌ direct/VPN | ❌ | ❌ | ❌ | **✅ WebSocket relay** |
+| Job/batch system | No | Yes | No | Yes | No | **Yes** |
+| Network ID join | DHT libp2p | GCS/Redis | Static | Static | Static | **Hex network ID** |
+| Language | Python | Python | Python | Python | Python+Go | **Python + plugin languages** |
+| Target | LLMs | Any | LLMs | LLMs | LLMs | **ASR + OCR + LLM** |
 
 ## Development
 
 ```bash
-uv sync          # install deps
-uv sync --dev    # include optional inference deps
-distripute-master --port 9090 --log-level DEBUG
+git clone && cd distripute
+uv sync             # install deps
+uv sync --dev       # include optional inference deps
+
+# start relay (terminal 1)
+uv run distripute-relay --port 9091 --log-level DEBUG
+
+# start master (terminal 2)
+uv run distripute-master --relay localhost:9091 --log-level DEBUG
+
+# start worker (terminal 3)
+uv run distripute-worker --relay localhost:9091 --network-id <from_master> --log-level DEBUG
+
+# run tests
+uv run pytest
 ```
 
 ## License

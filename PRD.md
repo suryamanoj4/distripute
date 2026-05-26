@@ -15,7 +15,16 @@ A researcher who wants to transcribe 5000 hours of audio using whisper-large-v3 
 
 ## Solution
 
-Distripute is a distributed inference job system with three distribution strategies:
+Distripute is a distributed inference job system with a **relay-based architecture** that enables cross-internet connectivity without port forwarding:
+
+```
+Relay (public VPS, WebSocket)
+  ├── Master (behind NAT) connects outbound
+  ├── Workers (anywhere) connect outbound
+  └── Relay bridges by network_id
+```
+
+Three distribution strategies:
 
 ### Data Parallelism (default)
 Every worker loads the full model. Master shards input files across workers. Use when model fits on one node. Zero latency overhead — each file is processed independently.
@@ -28,11 +37,12 @@ Model layers chained sequentially. Data flows worker → worker → worker. Use 
 
 ### Core Innovations
 
-1. **Network ID** — Master prints a hex token on startup. Workers join with it. No DNS, no Redis, no static config.
-2. **mDNS discovery** — Workers on the same LAN auto-discover the master by network_id.
-3. **Model Registry** — Declarative knowledge of model architectures (whisper layer count, transformer block size, etc.) enables automatic shard assignment.
-4. **Plugin protocol** — Inference backends are standalone executables communicating via JSON over stdin/stdout. Any language (Python, Go, Rust, C++) can be a plugin.
-5. **Heterogeneous pools** — Workers report CPU cores, RAM, GPU count, GPU memory. Scheduler matches tasks to appropriate workers.
+1. **Relay-based connectivity** — A lightweight WebSocket relay on a public VPS bridges master ↔ workers. All nodes connect outbound. No port forwarding, no VPN, no static IPs. Works across any network topology.
+2. **Network ID** — Master prints a hex token on startup. Workers join with it. The relay routes by network_id.
+3. **mDNS discovery** — Workers on the same LAN auto-discover the master by network_id (direct mode fallback).
+4. **Model Registry** — Declarative knowledge of model architectures (whisper layer count, transformer block size, etc.) enables automatic shard assignment.
+5. **Plugin protocol** — Inference backends are standalone executables communicating via JSON over stdin/stdout. Any language (Python, Go, Rust, C++) can be a plugin.
+6. **Heterogeneous pools** — Workers report CPU cores, RAM, GPU count, GPU memory. Scheduler matches tasks to appropriate workers.
 
 ## User Stories
 
@@ -74,9 +84,10 @@ distripute/
 ├── PRD.md
 ├── distripute/
 │   ├── __init__.py
-│   ├── master.py           # HTTP server, scheduler, registry
-│   ├── worker.py           # Worker agent, heartbeat, task loop
-│   ├── cli.py              # CLI commands (job, worker, info)
+│   ├── master.py           # HTTP server, scheduler, registry + relay client
+│   ├── worker.py           # Worker agent + relay client
+│   ├── relay.py            # WebSocket relay server (public bridge)
+│   ├── cli.py              # CLI commands (job, worker, info, relay)
 │   ├── registry.py         # Model registry (architecture knowledge)
 │   └── runner.py           # Plugin subprocess runner
 ├── plugins/
@@ -85,6 +96,7 @@ distripute/
 └── tests/
     ├── test_scheduler.py
     ├── test_registry.py
+    ├── test_relay.py
     └── test_cli.py
 ```
 
@@ -169,9 +181,18 @@ Worker spawns a persistent subprocess per plugin type. Communication via JSON li
 
 ### Worker Discovery
 
-1. **Primary:** `--master <host:port> --network-id <token>` on the worker CLI
-2. **Optional:** `--discover` flag uses mDNS to find a master on LAN broadcasting the matching network_id
-3. Master validates network_id on `/register` — rejects mismatched tokens
+Two modes:
+
+**Direct mode** (same LAN or public IP):
+1. Workers connect via HTTP to `--master <host:port>`
+2. Optional `--discover` uses mDNS on LAN
+3. Master validates network_id on `/register`
+
+**Relay mode** (internet, any topology):
+1. Master connects outbound to relay via WebSocket: `--relay <host:port>`
+2. Workers connect outbound to same relay: `--relay <host:port> --network-id <token>`
+3. Relay bridges all messages between master and workers by network_id
+4. Master validates network_id on registration — mismatched tokens rejected
 
 ### Heartbeat & Fault Tolerance
 
@@ -211,6 +232,49 @@ Worker spawns a persistent subprocess per plugin type. Communication via JSON li
 
 ### Prior Art
 Standard aiohttp test patterns using `aiohttp.test_utils.AioHTTPTestCase` or `pytest-aiohttp`. CLI tests use `click.testing.CliRunner`.
+
+### Relay Protocol
+
+The relay uses a simple JSON-over-WebSocket protocol:
+
+**Master registration:**
+```json
+{"type": "master_hello", "network_id": "dstr-a1b2c3d4e5", "version": "0.1.0"}
+```
+Relay responds: `{"type": "master_ack", "network_id": "..."}`
+
+**Worker registration:**
+```json
+{"type": "worker_hello", "network_id": "dstr-a1b2c3d4e5", "worker_id": "w-abc", "version": "0.1.0"}
+```
+Relay responds: `{"type": "worker_ack", "worker_id": "..."}`
+Relay also notifies the master: `{"type": "worker_joined", "worker_id": "..."}`
+
+**API calls (tunneled through relay):**
+```json
+{"type": "forward", "target": "master", "network_id": "...", "payload": {"type": "register", ...}}
+```
+
+**Disconnection:**
+When a worker WebSocket closes, the relay sends `{"type": "worker_left", "worker_id": "..."}` to the master.
+
+The relay does **not** read or interpret payloads — it's a pure message forwarder.
+
+### Master API (HTTP + JSON — for direct/local clients)
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/register` | Worker joins with network_id + capabilities |
+| POST | `/heartbeat` | Worker heartbeat (every 10s) |
+| POST | `/tasks/poll` | Worker fetches pending tasks |
+| POST | `/tasks/result` | Worker submits task result |
+| POST | `/job` | Create a new inference job |
+| GET | `/job/{id}` | Get job status/progress |
+| GET | `/jobs` | List all jobs |
+| GET | `/workers` | List all registered workers |
+| GET | `/info` | Network info + status |
+
+When running in relay mode, the master also processes the same API calls received via its WebSocket connection to the relay.
 
 ## Out of Scope (v0.1)
 
