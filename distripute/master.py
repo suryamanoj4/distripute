@@ -39,6 +39,8 @@ class MasterNode:
         r.add_post("/heartbeat", self._handle_heartbeat)
         r.add_post("/tasks/poll", self._handle_poll)
         r.add_post("/tasks/result", self._handle_result)
+        r.add_post("/task", self._handle_submit_task)
+        r.add_get("/task/{tid}", self._handle_get_task)
         r.add_post("/job", self._handle_create_job)
         r.add_get("/job/{jid}", self._handle_get_job)
         r.add_get("/jobs", self._handle_list_jobs)
@@ -165,7 +167,7 @@ class MasterNode:
         wid = data.get("worker_id", "")
         if wid not in self.workers:
             return web.json_response({"error": "unknown worker"}, status=403)
-        tasks = self._schedule(wid, data.get("max_tasks", 4))
+        tasks = self._schedule_func_task(wid, data.get("max_tasks", 4))
         return web.json_response({"tasks": tasks})
 
     async def _handle_result(self, request):
@@ -236,6 +238,74 @@ class MasterNode:
     async def _handle_list_models(self, _r):
         return web.json_response({"models": reg.list()})
 
+    # ── @distripute.task handlers ────────────────────────────
+
+    async def _handle_submit_task(self, request):
+        data = await request.json()
+        if data.get("network_id") != self.network_id:
+            return web.json_response({"error": "invalid network_id"}, status=403)
+
+        tid = data.get("task_id", uuid.uuid4().hex[:8])
+        task = dict(
+            id=tid,
+            func_name=data.get("func_name", "unknown"),
+            source=data.get("source", ""),
+            requirements=data.get("requirements", []),
+            payload=data.get("payload", ""),
+            args=data.get("args", []),
+            kwargs=data.get("kwargs", {}),
+            status="pending",
+            worker_id="",
+            result=None,
+            error="",
+        )
+        self.tasks[tid] = task
+        self._pending.append(tid)
+        logger.info(f"task {tid}: {task['func_name']} queued")
+        return web.json_response({"task_id": tid, "status": "pending"})
+
+    async def _handle_get_task(self, request):
+        tid = request.match_info["tid"]
+        task = self.tasks.get(tid)
+        if not task:
+            return web.json_response({"error": "not found"}, status=404)
+        return web.json_response({
+            "task_id": task["id"],
+            "status": task["status"],
+            "result": task.get("result"),
+            "error": task.get("error"),
+            "worker_id": task.get("worker_id", ""),
+        })
+
+    def _schedule_func_task(self, worker_id: str, max_tasks: int) -> list[dict]:
+        worker = self.workers.get(worker_id)
+        if not worker:
+            return []
+        now = asyncio.get_event_loop().time()
+        if now - worker.get("last_seen", 0) > 30:
+            return []
+
+        assigned = []
+        remaining = []
+        for tid in self._pending:
+            task = self.tasks.get(tid)
+            if not task:
+                continue
+            if not task.get("source"):
+                remaining.append(tid)
+                continue
+            if len(assigned) >= max_tasks:
+                remaining.append(tid)
+                continue
+            task["status"] = "running"
+            task["worker_id"] = worker_id
+            worker["active_tasks"] = worker.get("active_tasks", 0) + 1
+            assigned.append(dict(task))
+            remaining.append(tid)
+
+        self._pending = remaining
+        return assigned
+
     # ── Relay WebSocket client ──────────────────────────────
 
     async def _relay_loop(self):
@@ -278,7 +348,7 @@ class MasterNode:
                                          active_tasks=body.get("active_tasks", 0))
         elif action == "poll":
             wid = body.get("worker_id", "")
-            tasks = self._schedule(wid, body.get("max_tasks", 4))
+            tasks = self._schedule_func_task(wid, body.get("max_tasks", 4))
             await ws.send_json({"type": "forward", "network_id": self.network_id,
                                 "target_worker": wid,
                                 "payload": {"action": "poll_result", "tasks": tasks}})
