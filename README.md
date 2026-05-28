@@ -31,6 +31,79 @@ result = transcribe("/data/audio.wav").get()
                  └────────────┘     └──────────────┘
 ```
 
+## Distribution Strategies
+
+The three forms of parallelism are the core idea of Distripute. Each maps to a different `@distripute.*` decorator, controlling how computation is split across the mesh.
+
+### Data Parallelism (`@distripute.task`)
+
+Every call to a `@distripute.task` function runs on **one worker**. Call it N times with different inputs and the master distributes those calls across all available workers. Each worker has the full function code — only the data (arguments) differs.
+
+```
+Files: [a.wav, b.wav, c.wav, d.wav]
+Calls: transcribe(a)  transcribe(b)  transcribe(c)  transcribe(d)
+         └──────┘      └──────┘      └──────┘      └──────┘
+       Worker 1      Worker 2      Worker 1      Worker 3   ← each has full source
+```
+
+```python
+results = [transcribe(f).get() for f in files]  # 4 calls → 3 workers
+```
+
+**Use when:** Model fits on one node. Zero communication overhead.
+
+### Model Parallelism (future: `@distripute.shard`)
+
+Model layers are split across workers. Each worker hosts a contiguous range of layers. A forward pass goes through all workers sequentially — Worker A does layers 0–5, passes activations to Worker B for layers 6–10, etc.
+
+```
+input → Worker A  →  Worker B  →  Worker C  → output
+        (layers     (layers      (layers
+          0-5)       6-10)        11-16)
+```
+
+Planned API:
+```python
+@distripute.shard(stage=0, num_stages=3, model="whisper-large-v3")
+def encoder_stage(inputs):
+    # Worker 0: layers 0-10
+    # Worker 1: layers 11-21
+    # Worker 2: layers 22-32
+    pass
+```
+
+**Use when:** Model exceeds single GPU/CPU VRAM.
+
+### Pipeline Parallelism (future: `@distripute.pipeline`)
+
+Independent pipeline stages where each stage runs on a dedicated worker and data streams through them continuously. Like model parallelism but stages can be different functions, not just layer slices.
+
+```
+Audio chunks → segment → transcribe → translate → output
+                [W1]       [W2]        [W3]       [W4]
+```
+
+Planned API:
+```python
+@distripute.pipeline(stage=0, name="segments")
+def split_audio(path): ...
+
+@distripute.pipeline(stage=1, name="transcribe")
+def transcribe_segment(segment): ...
+```
+
+**Use when:** Multi-step inference pipelines where different workers handle different steps.
+
+### Current Status
+
+| Strategy | Decorator | Status |
+|---|---|---|
+| Data Parallel | `@distripute.task` | ✅ Implemented |
+| Model Parallel | `@distripute.shard` (planned) | 🔜 |
+| Pipeline Parallel | `@distripute.pipeline` (planned) | 🔜 |
+
+The mesh (relay + master + worker) and task infrastructure are built. Model and pipeline parallelism will reuse the same networking layer with new decorators for inter-worker coordination and activation passing.
+
 ## Quick Start
 
 ```bash
