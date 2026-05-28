@@ -1,0 +1,200 @@
+syntax = "proto3";
+
+package distripute;
+
+// ── Core Messages ────────────────────────────────────────
+
+message Empty {}
+
+message Ack { bool ok = 1; }
+
+message FileChunk {
+  string filename = 1;
+  bytes data = 2;
+  int64 offset = 3;
+  int64 total_size = 4;
+}
+
+message InfoResponse {
+  string network_id = 1;
+  string version = 2;
+  int32 workers = 3;
+  int32 pending_tasks = 4;
+}
+
+// ── Worker Registration ─────────────────────────────────
+
+message RegisterRequest {
+  string network_id = 1;
+  string worker_id = 2;
+  int32 cpu_cores = 3;
+  int64 ram_bytes = 4;
+  int32 gpu_count = 5;
+  int64 gpu_mem_bytes = 6;
+  string hardware = 7;
+  repeated string supported_models = 8;
+}
+
+message RegisterResponse {
+  string worker_id = 1;
+  int32 heartbeat_interval = 2;
+  string version = 3;
+}
+
+// ── Heartbeat ───────────────────────────────────────────
+
+message HeartbeatRequest {
+  string worker_id = 1;
+  float load = 2;
+  int32 active_tasks = 3;
+}
+
+message HeartbeatResponse { bool acknowledged = 1; }
+
+// ── Task Polling ─────────────────────────────────────────
+
+message PollRequest {
+  string worker_id = 1;
+  int32 max_tasks = 2;
+}
+
+message TaskDef {
+  string id = 1;
+  string func_name = 2;
+  string source = 3;
+  repeated string requirements = 4;
+  bytes payload = 5;               // cloudpickled (args, kwargs)
+  string job_id = 6;
+  string filename = 7;             // if part of a batch, the data filename
+  int64 file_size = 8;             // 0 if no file data needed
+}
+
+message PollResponse { repeated TaskDef tasks = 1; }
+
+// ── Task Results ──────────────────────────────────────────
+
+message TaskResult {
+  string task_id = 1;
+  bool success = 2;
+  string output = 3;
+  string error = 4;
+  double duration = 5;
+}
+
+// ── Task Submission (Client → Master) ────────────────────
+
+message TaskSubmit {
+  string network_id = 1;
+  string task_id = 2;
+  string func_name = 3;
+  string source = 4;
+  repeated string requirements = 5;
+  bytes payload = 6;
+}
+
+message TaskSubmitResponse {
+  string task_id = 1;
+  string status = 2;
+}
+
+message TaskResultRequest { string task_id = 1; }
+
+message TaskResultResponse {
+  string task_id = 1;
+  string status = 2;
+  string result = 3;
+  string error = 4;
+  string worker_id = 5;
+}
+
+// ── Batch Jobs ───────────────────────────────────────────
+
+message BatchCreateRequest {
+  string network_id = 1;
+  string func_name = 2;
+  string source = 3;
+  repeated string requirements = 4;
+  repeated string filenames = 5;    // file names to scan / serve
+  repeated bytes arg_payloads = 6;  // per-task cloudpickled args
+  string job_id = 7;
+}
+
+message BatchCreateResponse {
+  string job_id = 1;
+  int32 task_count = 2;
+  string status = 3;
+}
+
+message BatchStatusRequest { string job_id = 1; }
+
+message BatchStatusResponse {
+  string job_id = 1;
+  string status = 2;
+  int32 total = 3;
+  int32 done = 4;
+  int32 failed = 5;
+  int32 pending = 6;
+}
+
+// ── File Serving ─────────────────────────────────────────
+
+message FileRequest {
+  string job_id = 1;
+  string filename = 2;
+  int64 offset = 3;
+}
+
+message FileUploadRequest {
+  string job_id = 1;
+  string filename = 2;
+  bytes data = 3;
+  int64 offset = 4;
+  bool complete = 5;
+}
+
+message FileUploadResponse {
+  string path = 1;
+  int64 total_size = 2;
+}
+
+// ── Model Registry ──────────────────────────────────────
+
+message ModelRegisterRequest {
+  string name = 1;
+  map<string, string> info = 2;
+}
+
+message ModelListResponse { map<string, string> models = 1; }
+
+// ── Relay ────────────────────────────────────────────────
+
+message RelayFrame {
+  string network_id = 1;
+  string sender_id = 2;
+  string sender_role = 3;  // "master" or "worker"
+  string target_id = 4;    // "" for broadcast to master
+  string routing_key = 5;  // "register", "heartbeat", "poll", "result", "task"
+  bytes payload = 6;
+}
+
+// ── Services ────────────────────────────────────────────
+
+service Master {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc PollTasks(PollRequest) returns (PollResponse);
+  rpc SubmitResult(TaskResult) returns (Ack);
+  rpc SubmitTask(TaskSubmit) returns (TaskSubmitResponse);
+  rpc GetTaskResult(TaskResultRequest) returns (TaskResultResponse);
+  rpc CreateBatch(BatchCreateRequest) returns (BatchCreateResponse);
+  rpc GetBatchStatus(BatchStatusRequest) returns (BatchStatusResponse);
+  rpc GetFile(FileRequest) returns (stream FileChunk);
+  rpc UploadFile(stream FileChunk) returns (FileUploadResponse);
+  rpc RegisterModel(ModelRegisterRequest) returns (Ack);
+  rpc ListModels(Empty) returns (ModelListResponse);
+  rpc GetInfo(Empty) returns (InfoResponse);
+}
+
+service Relay {
+  rpc Connect(stream RelayFrame) returns (stream RelayFrame);
+}
