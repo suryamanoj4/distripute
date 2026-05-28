@@ -265,7 +265,42 @@ worker --relay relay.io:9091 --network-id xyz  # anywhere
 
 ---
 
-## 5. Worker Execution Environment
+## 5. Task Cache (Redis)
+
+The master uses a `Cache` abstraction backed by **Redis** or in-memory dicts (fallback). All task queue, worker state, and job state go through this cache.
+
+### Data structures in Redis
+
+| Redis key | Type | Purpose |
+|---|---|---|
+| `pending` | **List** | Task ID queue. `LPUSH` by client, `RPOP` by scheduler. |
+| `task:{task_id}` | **Hash** | Task state: status, func_name, source, payload, worker_id, result, error, job_id, filename |
+| `worker:{worker_id}` | **Hash** | Worker state: cpu_cores, gpu_count, hardware, load, active_tasks, last_seen |
+| `workers` | **Set** | All registered worker IDs (for listing) |
+| `job:{job_id}` | **Hash** | Batch job state: status, total, done, failed |
+| `jobs` | **Set** | All job IDs (for listing) |
+
+### Why not persistence
+
+Redis is configured as a pure cache with `maxmemory` + `allkeys-lru` eviction. Task results are consumed and discarded. If Redis restarts, the master falls back to in-memory mode (dev) or re-queues tasks from the gRPC client side.
+
+### Starting with Redis
+
+```bash
+# Start Redis locally
+redis-server
+
+# Start master with Redis
+distripute master --redis redis://localhost:6379
+
+# Without --redis flag, falls back to in-memory dicts
+```
+
+### Cache fallback
+
+When no `--redis` URL is provided, `Cache` uses Python dicts/lists. Same API, same behavior — no Redis required for development or single-node testing. All 28 tests run without Redis.
+
+## 6. Worker Execution Environment
 
 ### `uv run` dependency management
 
@@ -302,7 +337,7 @@ Reports capabilities on `Register()` for future scheduling decisions.
 
 ---
 
-## 6. Code Structure
+## 7. Code Structure
 
 ```
 distripute/
@@ -331,7 +366,7 @@ distripute/
 
 ---
 
-## 7. Planned: Model Parallelism (`@distripute.shard`)
+## 8. Planned: Model Parallelism (`@distripute.shard`)
 
 For models too large for one GPU, sharding splits transformer layers across workers:
 
@@ -357,7 +392,7 @@ def whisper_stage(inputs):
 
 ---
 
-## 8. Planned: Pipeline Parallelism (`@distripute.pipeline`)
+## 9. Planned: Pipeline Parallelism (`@distripute.pipeline`)
 
 For multi-step workflows where different stages run on different workers:
 
@@ -385,7 +420,7 @@ Each stage runs on a dedicated worker. Output of stage N is routed to stage N+1.
 
 ---
 
-## 9. Comparison to Existing Systems
+## 10. Comparison to Existing Systems
 
 | Feature | Ray | Petals | Exo | **Distripute** |
 |---|---|---|---|---|
@@ -402,18 +437,19 @@ Each stage runs on a dedicated worker. Output of stage N is routed to stage N+1.
 
 ---
 
-## 10. Configuration Reference
+## 11. Configuration Reference
 
 | Env | CLI flag | Default | Component | Description |
 |---|---|---|---|---|
 | `DISTRIPUTE_MASTER` | `--master` | — | Worker/Client | Master gRPC address |
 | `DISTRIPUTE_RELAY` | `--relay` | — | Master/Worker | Relay gRPC address |
+| `DISTRIPUTE_REDIS` | `--redis` | — | Master | Redis URL (redis://host:6379) |
 | `DISTRIPUTE_NETWORK_ID` | `--network-id` | — | Worker/Client | Network join token |
 | `DISTRIPUTE_LOG_LEVEL` | `--log-level` | INFO | All | Log verbosity |
 
 ---
 
-## 11. Generating Protobuf Code
+## 12. Generating Protobuf Code
 
 ```bash
 make proto

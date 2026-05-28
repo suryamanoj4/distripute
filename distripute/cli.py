@@ -22,12 +22,13 @@ def cli():
 @click.option("--host", default="0.0.0.0")
 @click.option("--port", default=9090, type=int)
 @click.option("--relay", default="", envvar="DISTRIPUTE_RELAY")
+@click.option("--redis", default="", envvar="DISTRIPUTE_REDIS", help="Redis URL for task queue (redis://localhost:6379)")
 @click.option("--log-level", default="INFO")
-def master(host, port, relay, log_level):
+def master(host, port, relay, redis, log_level):
     """Start a master node."""
     logging.basicConfig(level=getattr(logging, log_level),
                         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    asyncio.run(master_mod.serve(host=host, port=port, relay_addr=relay))
+    asyncio.run(master_mod.serve(host=host, port=port, relay_addr=relay, redis_url=redis))
 
 
 @cli.command()
