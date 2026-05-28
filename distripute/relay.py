@@ -1,113 +1,80 @@
 import asyncio
-import json
 import logging
 from collections import defaultdict
 
 import click
-from aiohttp import web, WSMsgType
+import grpc
+
+from .grpc import pb, grpc as rpcmod
 
 logger = logging.getLogger("distripute.relay")
 
 
-class RelayServer:
-    def __init__(self, host="0.0.0.0", port=9091):
-        self.host = host
-        self.port = port
-        self._masters: dict[str, web.WebSocketResponse] = {}
-        self._workers: dict[str, list[tuple[str, web.WebSocketResponse]]] = defaultdict(list)
+class RelayServicer(rpcmod.RelayServicer):
+    def __init__(self):
+        self._masters: dict[str, grpc.aio.StreamStreamCall] = {}
+        self._workers: dict[str, list[tuple[str, grpc.aio.StreamStreamCall]]] = defaultdict(list)
         self._lock = asyncio.Lock()
 
-    async def _handle_ws(self, request):
-        ws = web.WebSocketResponse()
-        await ws.prepare(request)
-        role = None
-        network_id = None
-        node_id = "unknown"
+    async def Connect(self, request_iterator, context):
+        first = await request_iterator.__anext__()
+        network_id = first.network_id
+        sender_id = first.sender_id
+        role = first.sender_role
 
+        if role == "master":
+            async with self._lock:
+                self._masters[network_id] = context
+            logger.info(f"master registered: {network_id}")
+
+            async def _from_master():
+                async for frame in request_iterator:
+                    yield frame
+
+            # forward worker messages to master
+            return self._forward_workers_to_master(_from_master(), network_id, context)
+
+        elif role == "worker":
+            async with self._lock:
+                self._workers[network_id].append((sender_id, context))
+            logger.info(f"worker joined: {sender_id} -> network_id={network_id}")
+
+            # notify master
+            async with self._lock:
+                master_ctx = self._masters.get(network_id)
+            if master_ctx:
+                await master_ctx.write(pb.RelayFrame(
+                    network_id=network_id, sender_id=sender_id,
+                    sender_role="worker", routing_key="worker_joined",
+                ))
+
+            return request_iterator
+
+        return request_iterator
+
+    async def _forward_workers_to_master(self, master_iter, network_id, master_ctx):
         try:
-            async for msg in ws:
-                if msg.type != WSMsgType.TEXT:
-                    continue
-                data = json.loads(msg.data)
-                cmd = data.get("type")
-
-                if cmd == "master_hello":
-                    network_id = data["network_id"]
-                    async with self._lock:
-                        old = self._masters.get(network_id)
-                        if old and not old.closed:
-                            await old.close()
-                        self._masters[network_id] = ws
-                    role = "master"
-                    logger.info(f"master registered: network_id={network_id}")
-                    await ws.send_json({"type": "master_ack"})
-
-                elif cmd == "worker_hello":
-                    network_id = data["network_id"]
-                    node_id = data.get("worker_id", "unknown")
-                    async with self._lock:
-                        self._workers[network_id].append((node_id, ws))
-                    role = "worker"
-                    master_ws = self._masters.get(network_id)
-                    if master_ws and not master_ws.closed:
-                        await master_ws.send_json({
-                            "type": "worker_joined", "worker_id": node_id,
-                        })
-                    await ws.send_json({"type": "worker_ack", "worker_id": node_id})
-                    logger.info(f"worker joined: {node_id} -> network_id={network_id}")
-
-                elif cmd == "forward":
-                    target_net = data.get("network_id", network_id)
-                    payload = data.get("payload", {})
-                    async with self._lock:
-                        dest = self._masters.get(target_net) if role == "worker" else None
-                        if role == "master" and data.get("target_worker"):
-                            workers = self._workers.get(target_net, [])
-                            for wid, wws in workers:
-                                if wid == data["target_worker"]:
-                                    dest = wws
-                                    break
-                    if dest and not dest.closed:
-                        await dest.send_json(payload)
-                    else:
-                        await ws.send_json({"type": "error", "message": "target not connected"})
-
-                elif cmd == "ping":
-                    await ws.send_json({"type": "pong"})
-
-        except Exception:
-            pass
+            async for frame in master_iter:
+                pass  # handle master->worker messages
         finally:
             async with self._lock:
-                if role == "master" and network_id:
-                    self._masters.pop(network_id, None)
-                    logger.info(f"master disconnected: network_id={network_id}")
-                elif role == "worker" and network_id:
-                    self._workers[network_id] = [
-                        (n, w) for n, w in self._workers[network_id] if w is not ws
-                    ]
-                    master_ws = self._masters.get(network_id)
-                    if master_ws and not master_ws.closed:
-                        await master_ws.send_json({
-                            "type": "worker_left", "worker_id": node_id,
-                        })
-                    logger.info(f"worker disconnected: {node_id}")
-        return ws
+                self._masters.pop(network_id, None)
+                workers = self._workers.pop(network_id, [])
+                for wid, wctx in workers:
+                    await wctx.write(pb.RelayFrame(
+                        network_id=network_id, sender_id=wid,
+                        sender_role="worker", routing_key="worker_left",
+                    ))
 
-    def build_app(self):
-        app = web.Application()
-        app.router.add_get("/ws", self._handle_ws)
-        app.router.add_get("/health", lambda _r: web.json_response({"ok": True}))
-        return app
 
-    async def run_forever(self):
-        runner = web.AppRunner(self.build_app())
-        await runner.setup()
-        site = web.TCPSite(runner, self.host, self.port)
-        await site.start()
-        logger.info(f"relay listening on ws://{self.host}:{self.port}")
-        while True:
-            await asyncio.sleep(3600)
+async def serve(host="0.0.0.0", port=9091):
+    logger.info(f"relay starting on {host}:{port}")
+    server = grpc.aio.server()
+    servicer = RelayServicer()
+    rpcmod.add_RelayServicer_to_server(servicer, server)
+    server.add_insecure_port(f"{host}:{port}")
+    await server.start()
+    await server.wait_for_termination()
 
 
 @click.command("relay")
@@ -115,9 +82,6 @@ class RelayServer:
 @click.option("--port", default=9091, type=int)
 @click.option("--log-level", default="INFO")
 def main(host, port, log_level):
-    logging.basicConfig(
-        level=getattr(logging, log_level),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
-    srv = RelayServer(host=host, port=port)
-    asyncio.run(srv.run_forever())
+    logging.basicConfig(level=getattr(logging, log_level),
+                        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    asyncio.run(serve(host=host, port=port))

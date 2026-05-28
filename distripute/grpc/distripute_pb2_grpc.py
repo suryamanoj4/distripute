@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-import distripute_pb2 as distripute__pb2
+from . import distripute_pb2 as distripute__pb2
 
 GRPC_GENERATED_VERSION = '1.80.0'
 GRPC_VERSION = grpc.__version__

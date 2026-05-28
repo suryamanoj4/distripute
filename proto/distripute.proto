@@ -9,10 +9,11 @@ message Empty {}
 message Ack { bool ok = 1; }
 
 message FileChunk {
-  string filename = 1;
-  bytes data = 2;
-  int64 offset = 3;
-  int64 total_size = 4;
+  string job_id = 1;
+  string filename = 2;
+  bytes data = 3;
+  int64 offset = 4;
+  int64 total_size = 5;
 }
 
 message InfoResponse {

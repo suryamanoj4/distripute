@@ -1,15 +1,15 @@
 import asyncio
 import json
 import logging
-import sys
 
 import click
-from aiohttp import ClientSession, WSMsgType
+import grpc
 
 from . import VERSION
 from . import master as master_mod
 from . import worker as worker_mod
 from . import relay as relay_mod
+from .grpc import pb, grpc as rpcmod
 
 
 @click.group()
@@ -17,8 +17,6 @@ from . import relay as relay_mod
 def cli():
     """Distripute — distributed task execution mesh."""
 
-
-# ── master ─────────────────────────────────────────────────
 
 @cli.command()
 @click.option("--host", default="0.0.0.0")
@@ -29,11 +27,8 @@ def master(host, port, relay, log_level):
     """Start a master node."""
     logging.basicConfig(level=getattr(logging, log_level),
                         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    node = master_mod.MasterNode(host=host, port=port, relay_addr=relay)
-    asyncio.run(node.run_forever())
+    asyncio.run(master_mod.serve(host=host, port=port, relay_addr=relay))
 
-
-# ── worker ─────────────────────────────────────────────────
 
 @cli.command()
 @click.option("--master", default="", envvar="DISTRIPUTE_MASTER")
@@ -46,15 +41,10 @@ def worker(master, relay, network_id, log_level):
                         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     if not master and not relay:
         raise click.UsageError("specify --master or --relay")
-    node = worker_mod.WorkerNode(
+    asyncio.run(worker_mod.run_worker(
         master_addr=master, relay_addr=relay, network_id=network_id,
-    )
-    logger = logging.getLogger("distripute.cli")
-    logger.info(f"worker starting (hw={worker_mod.HARDWARE}, gpus={worker_mod.GPU_COUNT})")
-    asyncio.run(node.run_forever())
+    ))
 
-
-# ── relay ──────────────────────────────────────────────────
 
 @cli.command()
 @click.option("--host", default="0.0.0.0")
@@ -64,25 +54,22 @@ def relay(host, port, log_level):
     """Start a relay server for cross-internet connectivity."""
     logging.basicConfig(level=getattr(logging, log_level),
                         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    srv = relay_mod.RelayServer(host=host, port=port)
-    asyncio.run(srv.run_forever())
+    asyncio.run(relay_mod.serve(host=host, port=port))
 
-
-# ── info ───────────────────────────────────────────────────
 
 @cli.command()
 @click.option("--master", "-m", default="localhost:9090", envvar="DISTRIPUTE_MASTER")
 def info(master):
     """Show mesh network info."""
     async def _do():
-        async with ClientSession() as session:
-            async with session.get(f"http://{master}/info") as resp:
-                return await resp.json()
+        async with grpc.aio.insecure_channel(master) as channel:
+            stub = rpcmod.MasterStub(channel)
+            resp = await stub.GetInfo(pb.Empty())
+            return dict(network_id=resp.network_id, version=resp.version,
+                        workers=resp.workers, pending=resp.pending_tasks)
     result = asyncio.run(_do())
     click.echo(json.dumps(result, indent=2))
 
-
-# ── entry ──────────────────────────────────────────────────
 
 def main():
     cli()
