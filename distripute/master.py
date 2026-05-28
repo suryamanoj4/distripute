@@ -183,16 +183,16 @@ class MasterNode:
         wid = task.get("worker_id", "")
         if wid in self.workers:
             self.workers[wid]["active_tasks"] = max(0, self.workers[wid]["active_tasks"] - 1)
-        job = self.jobs.get(task["job_id"])
-        if job:
-            if task["status"] == "done":
-                job["done"] += 1
+        # update job progress if this task belongs to a job
+        jid = task.get("job_id")
+        if jid and jid in self.jobs:
+            job = self.jobs[jid]
+            if data.get("success"):
+                job["done"] = job.get("done", 0) + 1
             else:
-                job["failed"] += 1
+                job["failed"] = job.get("failed", 0) + 1
             if job["done"] + job["failed"] >= job["total"]:
                 job["status"] = "completed" if job["failed"] == 0 else "failed"
-                elapsed = asyncio.get_event_loop().time() - job["created_at"]
-                logger.info(f"job {job['id']} finished: {job['done']}/{job['total']} in {elapsed:.1f}s")
         return web.json_response({"ok": True})
 
     async def _handle_create_job(self, request):

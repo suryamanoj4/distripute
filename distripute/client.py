@@ -9,11 +9,37 @@ import uuid
 import cloudpickle
 from aiohttp import ClientSession, ClientTimeout
 
-from .task import _RemoteResult
-
 logger = logging.getLogger("distripute.client")
 
-POLL_INTERVAL = 0.5  # seconds between result polls
+POLL_INTERVAL = 0.5
+
+
+class _RemoteResult:
+    def __init__(self, task_id: str):
+        self._task_id = task_id
+        self._value = None
+        self._error = None
+        self._done = False
+
+    def get(self, timeout: float | None = None):
+        import threading
+        waited = 0.0
+        while not self._done:
+            if timeout and waited >= timeout:
+                raise TimeoutError(f"task {self._task_id} timed out")
+            threading.Event().wait(timeout=0.1)
+            waited += 0.1
+        if self._error:
+            raise self._error
+        return self._value
+
+    def _resolve(self, value):
+        self._value = value
+        self._done = True
+
+    def _reject(self, error):
+        self._error = error
+        self._done = True
 
 
 class _Client:

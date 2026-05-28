@@ -2,47 +2,13 @@ import functools
 import inspect
 from pathlib import Path
 
-from .client import _Client
+from .client import _Client, _RemoteResult
 
 _global_client = None
 
 
 class DistriputeNotConnectedError(RuntimeError):
     pass
-
-
-class _RemoteResult:
-    def __init__(self, task_id: str):
-        self._task_id = task_id
-        self._value = None
-        self._error = None
-        self._done = False
-
-    def get(self, timeout: float | None = None):
-        import threading
-        event = threading.Event()
-        def check():
-            while not self._done:
-                if event.wait(timeout=timeout or 0.1):
-                    break
-            return self._value
-        waited = 0.0
-        while not self._done:
-            if timeout and waited >= timeout:
-                raise TimeoutError(f"task {self._task_id} timed out")
-            event.wait(timeout=0.1)
-            waited += 0.1
-        if self._error:
-            raise self._error
-        return self._value
-
-    def _resolve(self, value):
-        self._value = value
-        self._done = True
-
-    def _reject(self, error):
-        self._error = error
-        self._done = True
 
 
 class RemoteFunction:
