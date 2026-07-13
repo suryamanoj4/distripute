@@ -375,6 +375,21 @@ class TestMasterGRPC:
         assert not registered.is_set()
         assert "relay registration failed" in caplog.text
 
+    async def test_relay_worker_registration_succeeds(self, servicer, stub, network_id, relay_addr):
+        relay_task = asyncio.create_task(master_mod._relay_loop(servicer, relay_addr, network_id))
+        worker_task = asyncio.create_task(worker_mod.run_worker(
+            relay_addr=relay_addr,
+            network_id=network_id,
+        ))
+
+        try:
+            info = await _wait_for_workers(stub, 1, timeout=8.0)
+            assert info.workers == 1
+        finally:
+            worker_task.cancel()
+            relay_task.cancel()
+            await asyncio.gather(worker_task, relay_task, return_exceptions=True)
+
     async def test_relay_worker_executes_task_end_to_end(self, servicer, stub, network_id, relay_addr, monkeypatch):
         async def fake_run(source, func_name, payload, requirements, filename="", file_path=""):
             return {"success": True, "output": f"relay:{func_name}", "error": "", "duration": 0.01}

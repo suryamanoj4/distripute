@@ -35,13 +35,14 @@ class RelayServicer(rpcmod.RelayServicer):
 
         await self._register_peer(peer)
         consumer = asyncio.create_task(self._consume(peer, request_iterator))
+        first_frame = asyncio.create_task(self._route_frame(peer, first))
 
         try:
             async for frame in self._yield_frames(peer):
                 yield frame
         finally:
             consumer.cancel()
-            results = await asyncio.gather(consumer, return_exceptions=True)
+            results = await asyncio.gather(consumer, first_frame, return_exceptions=True)
             for result in results:
                 if result is None or isinstance(result, asyncio.CancelledError):
                     continue
