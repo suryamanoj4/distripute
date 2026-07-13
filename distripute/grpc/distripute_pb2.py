@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x10\x64istripute.proto\x12\ndistripute\"\x07\n\x05\x45mpty\"\x11\n\x03\x41\x63k\x12\n\n\x02ok\x18\x01 \x01(\x08\"_\n\tFileChunk\x12\x0e\n\x06job_id\x18\x01 \x01(\t\x12\x10\n\x08\x66ilename\x18\x02 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\x12\x0e\n\x06offset\x18\x04 \x01(\x03\x12\x12\n\ntotal_size\x18\x05 \x01(\x03\"[\n\x0cInfoResponse\x12\x12\n\nnetwork_id\x18\x01 \x01(\t\x12\x0f\n\x07version\x18\x02 \x01(\t\x12\x0f\n\x07workers\x18\x03 \x01(\x05\x12\x15\n\rpending_tasks\x18\x04 \x01(\x05\"\xb4\x01\n\x0fRegisterRequest\x12\x12\n\nnetwork_id\x18\x01 \x01(\t\x12\x11\n\tworker_id\x18\x02 \x01(\t\x12\x11\n\tcpu_cores\x18\x03 \x01(\x05\x12\x11\n\tram_bytes\x18\x04 \x01(\x03\x12\x11\n\tgpu_count\x18\x05 \x01(\x05\x12\x15\n\rgpu_mem_bytes\x18\x06 \x01(\x03\x12\x10\n\x08hardware\x18\x07 \x01(\t\x12\x18\n\x10supported_models\x18\x08 \x03(\t\"R\n\x10RegisterResponse\x12\x11\n\tworker_id\x18\x01 \x01(\t\x12\x1a\n\x12heartbeat_interval\x18\x02 \x01(\x05\x12\x0f\n\x07version\x18\x03 \x01(\t\"I\n\x10HeartbeatRequest\x12\x11\n\tworker_id\x18\x01 \x01(\t\x12\x0c\n\x04load\x18\x02 \x01(\x02\x12\x14\n\x0c\x61\x63tive_tasks\x18\x03 \x01(\x05\")\n\x11HeartbeatResponse\x12\x14\n\x0c\x61\x63knowledged\x18\x01 \x01(\x08\"3\n\x0bPollRequest\x12\x11\n\tworker_id\x18\x01 \x01(\t\x12\x11\n\tmax_tasks\x18\x02 \x01(\x05\"\x94\x01\n\x07TaskDef\x12\n\n\x02id\x18\x01 \x01(\t\x12\x11\n\tfunc_name\x18\x02 \x01(\t\x12\x0e\n\x06source\x18\x03 \x01(\t\x12\x14\n\x0crequirements\x18\x04 \x03(\t\x12\x0f\n\x07payload\x18\x05 \x01(\x0c\x12\x0e\n\x06job_id\x18\x06 \x01(\t\x12\x10\n\x08\x66ilename\x18\x07 \x01(\t\x12\x11\n\tfile_size\x18\x08 \x01(\x03\"2\n\x0cPollResponse\x12\"\n\x05tasks\x18\x01 \x03(\x0b\x32\x13.distripute.TaskDef\"_\n\nTaskResult\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12\x0f\n\x07success\x18\x02 \x01(\x08\x12\x0e\n\x06output\x18\x03 \x01(\t\x12\r\n\x05\x65rror\x18\x04 \x01(\t\x12\x10\n\x08\x64uration\x18\x05 \x01(\x01\"{\n\nTaskSubmit\x12\x12\n\nnetwork_id\x18\x01 \x01(\t\x12\x0f\n\x07task_id\x18\x02 \x01(\t\x12\x11\n\tfunc_name\x18\x03 \x01(\t\x12\x0e\n\x06source\x18\x04 \x01(\t\x12\x14\n\x0crequirements\x18\x05 \x03(\t\x12\x0f\n\x07payload\x18\x06 \x01(\x0c\"5\n\x12TaskSubmitResponse\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\"$\n\x11TaskResultRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\"g\n\x12TaskResultResponse\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x0e\n\x06result\x18\x03 \x01(\t\x12\r\n\x05\x65rror\x18\x04 \x01(\t\x12\x11\n\tworker_id\x18\x05 \x01(\t\"\x9a\x01\n\x12\x42\x61tchCreateRequest\x12\x12\n\nnetwork_id\x18\x01 \x01(\t\x12\x11\n\tfunc_name\x18\x02 \x01(\t\x12\x0e\n\x06source\x18\x03 \x01(\t\x12\x14\n\x0crequirements\x18\x04 \x03(\t\x12\x11\n\tfilenames\x18\x05 \x03(\t\x12\x14\n\x0c\x61rg_payloads\x18\x06 \x03(\x0c\x12\x0e\n\x06job_id\x18\x07 \x01(\t\"I\n\x13\x42\x61tchCreateResponse\x12\x0e\n\x06job_id\x18\x01 \x01(\t\x12\x12\n\ntask_count\x18\x02 \x01(\x05\x12\x0e\n\x06status\x18\x03 \x01(\t\"$\n\x12\x42\x61tchStatusRequest\x12\x0e\n\x06job_id\x18\x01 \x01(\t\"s\n\x13\x42\x61tchStatusResponse\x12\x0e\n\x06job_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\r\n\x05total\x18\x03 \x01(\x05\x12\x0c\n\x04\x64one\x18\x04 \x01(\x05\x12\x0e\n\x06\x66\x61iled\x18\x05 \x01(\x05\x12\x0f\n\x07pending\x18\x06 \x01(\x05\"?\n\x0b\x46ileRequest\x12\x0e\n\x06job_id\x18\x01 \x01(\t\x12\x10\n\x08\x66ilename\x18\x02 \x01(\t\x12\x0e\n\x06offset\x18\x03 \x01(\x03\"e\n\x11\x46ileUploadRequest\x12\x0e\n\x06job_id\x18\x01 \x01(\t\x12\x10\n\x08\x66ilename\x18\x02 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\x12\x0e\n\x06offset\x18\x04 \x01(\x03\x12\x10\n\x08\x63omplete\x18\x05 \x01(\x08\"6\n\x12\x46ileUploadResponse\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x12\n\ntotal_size\x18\x02 \x01(\x03\"\x8b\x01\n\x14ModelRegisterRequest\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x38\n\x04info\x18\x02 \x03(\x0b\x32*.distripute.ModelRegisterRequest.InfoEntry\x1a+\n\tInfoEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"}\n\x11ModelListResponse\x12\x39\n\x06models\x18\x01 \x03(\x0b\x32).distripute.ModelListResponse.ModelsEntry\x1a-\n\x0bModelsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\x81\x01\n\nRelayFrame\x12\x12\n\nnetwork_id\x18\x01 \x01(\t\x12\x11\n\tsender_id\x18\x02 \x01(\t\x12\x13\n\x0bsender_role\x18\x03 \x01(\t\x12\x11\n\ttarget_id\x18\x04 \x01(\t\x12\x13\n\x0brouting_key\x18\x05 \x01(\t\x12\x0f\n\x07payload\x18\x06 \x01(\x0c\x32\x8b\x07\n\x06Master\x12\x45\n\x08Register\x12\x1b.distripute.RegisterRequest\x1a\x1c.distripute.RegisterResponse\x12H\n\tHeartbeat\x12\x1c.distripute.HeartbeatRequest\x1a\x1d.distripute.HeartbeatResponse\x12>\n\tPollTasks\x12\x17.distripute.PollRequest\x1a\x18.distripute.PollResponse\x12\x37\n\x0cSubmitResult\x12\x16.distripute.TaskResult\x1a\x0f.distripute.Ack\x12\x44\n\nSubmitTask\x12\x16.distripute.TaskSubmit\x1a\x1e.distripute.TaskSubmitResponse\x12N\n\rGetTaskResult\x12\x1d.distripute.TaskResultRequest\x1a\x1e.distripute.TaskResultResponse\x12N\n\x0b\x43reateBatch\x12\x1e.distripute.BatchCreateRequest\x1a\x1f.distripute.BatchCreateResponse\x12Q\n\x0eGetBatchStatus\x12\x1e.distripute.BatchStatusRequest\x1a\x1f.distripute.BatchStatusResponse\x12;\n\x07GetFile\x12\x17.distripute.FileRequest\x1a\x15.distripute.FileChunk0\x01\x12\x45\n\nUploadFile\x12\x15.distripute.FileChunk\x1a\x1e.distripute.FileUploadResponse(\x01\x12\x42\n\rRegisterModel\x12 .distripute.ModelRegisterRequest\x1a\x0f.distripute.Ack\x12>\n\nListModels\x12\x11.distripute.Empty\x1a\x1d.distripute.ModelListResponse\x12\x36\n\x07GetInfo\x12\x11.distripute.Empty\x1a\x18.distripute.InfoResponse2F\n\x05Relay\x12=\n\x07\x43onnect\x12\x16.distripute.RelayFrame\x1a\x16.distripute.RelayFrame(\x01\x30\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x10\x64istripute.proto\x12\ndistripute\"\x07\n\x05\x45mpty\"\x11\n\x03\x41\x63k\x12\n\n\x02ok\x18\x01 \x01(\x08\"_\n\tFileChunk\x12\x0e\n\x06job_id\x18\x01 \x01(\t\x12\x10\n\x08\x66ilename\x18\x02 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\x12\x0e\n\x06offset\x18\x04 \x01(\x03\x12\x12\n\ntotal_size\x18\x05 \x01(\x03\"[\n\x0cInfoResponse\x12\x12\n\nnetwork_id\x18\x01 \x01(\t\x12\x0f\n\x07version\x18\x02 \x01(\t\x12\x0f\n\x07workers\x18\x03 \x01(\x05\x12\x15\n\rpending_tasks\x18\x04 \x01(\x05\"\xb4\x01\n\x0fRegisterRequest\x12\x12\n\nnetwork_id\x18\x01 \x01(\t\x12\x11\n\tworker_id\x18\x02 \x01(\t\x12\x11\n\tcpu_cores\x18\x03 \x01(\x05\x12\x11\n\tram_bytes\x18\x04 \x01(\x03\x12\x11\n\tgpu_count\x18\x05 \x01(\x05\x12\x15\n\rgpu_mem_bytes\x18\x06 \x01(\x03\x12\x10\n\x08hardware\x18\x07 \x01(\t\x12\x18\n\x10supported_models\x18\x08 \x03(\t\"R\n\x10RegisterResponse\x12\x11\n\tworker_id\x18\x01 \x01(\t\x12\x1a\n\x12heartbeat_interval\x18\x02 \x01(\x05\x12\x0f\n\x07version\x18\x03 \x01(\t\"I\n\x10HeartbeatRequest\x12\x11\n\tworker_id\x18\x01 \x01(\t\x12\x0c\n\x04load\x18\x02 \x01(\x02\x12\x14\n\x0c\x61\x63tive_tasks\x18\x03 \x01(\x05\")\n\x11HeartbeatResponse\x12\x14\n\x0c\x61\x63knowledged\x18\x01 \x01(\x08\"3\n\x0bPollRequest\x12\x11\n\tworker_id\x18\x01 \x01(\t\x12\x11\n\tmax_tasks\x18\x02 \x01(\x05\"\x94\x01\n\x07TaskDef\x12\n\n\x02id\x18\x01 \x01(\t\x12\x11\n\tfunc_name\x18\x02 \x01(\t\x12\x0e\n\x06source\x18\x03 \x01(\t\x12\x14\n\x0crequirements\x18\x04 \x03(\t\x12\x0f\n\x07payload\x18\x05 \x01(\x0c\x12\x0e\n\x06job_id\x18\x06 \x01(\t\x12\x10\n\x08\x66ilename\x18\x07 \x01(\t\x12\x11\n\tfile_size\x18\x08 \x01(\x03\"2\n\x0cPollResponse\x12\"\n\x05tasks\x18\x01 \x03(\x0b\x32\x13.distripute.TaskDef\"r\n\nTaskResult\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12\x0f\n\x07success\x18\x02 \x01(\x08\x12\x0e\n\x06output\x18\x03 \x01(\t\x12\r\n\x05\x65rror\x18\x04 \x01(\t\x12\x10\n\x08\x64uration\x18\x05 \x01(\x01\x12\x11\n\tworker_id\x18\x06 \x01(\t\"{\n\nTaskSubmit\x12\x12\n\nnetwork_id\x18\x01 \x01(\t\x12\x0f\n\x07task_id\x18\x02 \x01(\t\x12\x11\n\tfunc_name\x18\x03 \x01(\t\x12\x0e\n\x06source\x18\x04 \x01(\t\x12\x14\n\x0crequirements\x18\x05 \x03(\t\x12\x0f\n\x07payload\x18\x06 \x01(\x0c\"5\n\x12TaskSubmitResponse\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\"$\n\x11TaskResultRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\"g\n\x12TaskResultResponse\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x0e\n\x06result\x18\x03 \x01(\t\x12\r\n\x05\x65rror\x18\x04 \x01(\t\x12\x11\n\tworker_id\x18\x05 \x01(\t\"\x9a\x01\n\x12\x42\x61tchCreateRequest\x12\x12\n\nnetwork_id\x18\x01 \x01(\t\x12\x11\n\tfunc_name\x18\x02 \x01(\t\x12\x0e\n\x06source\x18\x03 \x01(\t\x12\x14\n\x0crequirements\x18\x04 \x03(\t\x12\x11\n\tfilenames\x18\x05 \x03(\t\x12\x14\n\x0c\x61rg_payloads\x18\x06 \x03(\x0c\x12\x0e\n\x06job_id\x18\x07 \x01(\t\"I\n\x13\x42\x61tchCreateResponse\x12\x0e\n\x06job_id\x18\x01 \x01(\t\x12\x12\n\ntask_count\x18\x02 \x01(\x05\x12\x0e\n\x06status\x18\x03 \x01(\t\"$\n\x12\x42\x61tchStatusRequest\x12\x0e\n\x06job_id\x18\x01 \x01(\t\"s\n\x13\x42\x61tchStatusResponse\x12\x0e\n\x06job_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\r\n\x05total\x18\x03 \x01(\x05\x12\x0c\n\x04\x64one\x18\x04 \x01(\x05\x12\x0e\n\x06\x66\x61iled\x18\x05 \x01(\x05\x12\x0f\n\x07pending\x18\x06 \x01(\x05\"?\n\x0b\x46ileRequest\x12\x0e\n\x06job_id\x18\x01 \x01(\t\x12\x10\n\x08\x66ilename\x18\x02 \x01(\t\x12\x0e\n\x06offset\x18\x03 \x01(\x03\"e\n\x11\x46ileUploadRequest\x12\x0e\n\x06job_id\x18\x01 \x01(\t\x12\x10\n\x08\x66ilename\x18\x02 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\x12\x0e\n\x06offset\x18\x04 \x01(\x03\x12\x10\n\x08\x63omplete\x18\x05 \x01(\x08\"6\n\x12\x46ileUploadResponse\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x12\n\ntotal_size\x18\x02 \x01(\x03\"\x8b\x01\n\x14ModelRegisterRequest\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x38\n\x04info\x18\x02 \x03(\x0b\x32*.distripute.ModelRegisterRequest.InfoEntry\x1a+\n\tInfoEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"}\n\x11ModelListResponse\x12\x39\n\x06models\x18\x01 \x03(\x0b\x32).distripute.ModelListResponse.ModelsEntry\x1a-\n\x0bModelsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\x81\x01\n\nRelayFrame\x12\x12\n\nnetwork_id\x18\x01 \x01(\t\x12\x11\n\tsender_id\x18\x02 \x01(\t\x12\x13\n\x0bsender_role\x18\x03 \x01(\t\x12\x11\n\ttarget_id\x18\x04 \x01(\t\x12\x13\n\x0brouting_key\x18\x05 \x01(\t\x12\x0f\n\x07payload\x18\x06 \x01(\x0c\x32\x8b\x07\n\x06Master\x12\x45\n\x08Register\x12\x1b.distripute.RegisterRequest\x1a\x1c.distripute.RegisterResponse\x12H\n\tHeartbeat\x12\x1c.distripute.HeartbeatRequest\x1a\x1d.distripute.HeartbeatResponse\x12>\n\tPollTasks\x12\x17.distripute.PollRequest\x1a\x18.distripute.PollResponse\x12\x37\n\x0cSubmitResult\x12\x16.distripute.TaskResult\x1a\x0f.distripute.Ack\x12\x44\n\nSubmitTask\x12\x16.distripute.TaskSubmit\x1a\x1e.distripute.TaskSubmitResponse\x12N\n\rGetTaskResult\x12\x1d.distripute.TaskResultRequest\x1a\x1e.distripute.TaskResultResponse\x12N\n\x0b\x43reateBatch\x12\x1e.distripute.BatchCreateRequest\x1a\x1f.distripute.BatchCreateResponse\x12Q\n\x0eGetBatchStatus\x12\x1e.distripute.BatchStatusRequest\x1a\x1f.distripute.BatchStatusResponse\x12;\n\x07GetFile\x12\x17.distripute.FileRequest\x1a\x15.distripute.FileChunk0\x01\x12\x45\n\nUploadFile\x12\x15.distripute.FileChunk\x1a\x1e.distripute.FileUploadResponse(\x01\x12\x42\n\rRegisterModel\x12 .distripute.ModelRegisterRequest\x1a\x0f.distripute.Ack\x12>\n\nListModels\x12\x11.distripute.Empty\x1a\x1d.distripute.ModelListResponse\x12\x36\n\x07GetInfo\x12\x11.distripute.Empty\x1a\x18.distripute.InfoResponse2F\n\x05Relay\x12=\n\x07\x43onnect\x12\x16.distripute.RelayFrame\x1a\x16.distripute.RelayFrame(\x01\x30\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -58,41 +58,41 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_POLLRESPONSE']._serialized_start=839
   _globals['_POLLRESPONSE']._serialized_end=889
   _globals['_TASKRESULT']._serialized_start=891
-  _globals['_TASKRESULT']._serialized_end=986
-  _globals['_TASKSUBMIT']._serialized_start=988
-  _globals['_TASKSUBMIT']._serialized_end=1111
-  _globals['_TASKSUBMITRESPONSE']._serialized_start=1113
-  _globals['_TASKSUBMITRESPONSE']._serialized_end=1166
-  _globals['_TASKRESULTREQUEST']._serialized_start=1168
-  _globals['_TASKRESULTREQUEST']._serialized_end=1204
-  _globals['_TASKRESULTRESPONSE']._serialized_start=1206
-  _globals['_TASKRESULTRESPONSE']._serialized_end=1309
-  _globals['_BATCHCREATEREQUEST']._serialized_start=1312
-  _globals['_BATCHCREATEREQUEST']._serialized_end=1466
-  _globals['_BATCHCREATERESPONSE']._serialized_start=1468
-  _globals['_BATCHCREATERESPONSE']._serialized_end=1541
-  _globals['_BATCHSTATUSREQUEST']._serialized_start=1543
-  _globals['_BATCHSTATUSREQUEST']._serialized_end=1579
-  _globals['_BATCHSTATUSRESPONSE']._serialized_start=1581
-  _globals['_BATCHSTATUSRESPONSE']._serialized_end=1696
-  _globals['_FILEREQUEST']._serialized_start=1698
-  _globals['_FILEREQUEST']._serialized_end=1761
-  _globals['_FILEUPLOADREQUEST']._serialized_start=1763
-  _globals['_FILEUPLOADREQUEST']._serialized_end=1864
-  _globals['_FILEUPLOADRESPONSE']._serialized_start=1866
-  _globals['_FILEUPLOADRESPONSE']._serialized_end=1920
-  _globals['_MODELREGISTERREQUEST']._serialized_start=1923
-  _globals['_MODELREGISTERREQUEST']._serialized_end=2062
-  _globals['_MODELREGISTERREQUEST_INFOENTRY']._serialized_start=2019
-  _globals['_MODELREGISTERREQUEST_INFOENTRY']._serialized_end=2062
-  _globals['_MODELLISTRESPONSE']._serialized_start=2064
-  _globals['_MODELLISTRESPONSE']._serialized_end=2189
-  _globals['_MODELLISTRESPONSE_MODELSENTRY']._serialized_start=2144
-  _globals['_MODELLISTRESPONSE_MODELSENTRY']._serialized_end=2189
-  _globals['_RELAYFRAME']._serialized_start=2192
-  _globals['_RELAYFRAME']._serialized_end=2321
-  _globals['_MASTER']._serialized_start=2324
-  _globals['_MASTER']._serialized_end=3231
-  _globals['_RELAY']._serialized_start=3233
-  _globals['_RELAY']._serialized_end=3303
+  _globals['_TASKRESULT']._serialized_end=1005
+  _globals['_TASKSUBMIT']._serialized_start=1007
+  _globals['_TASKSUBMIT']._serialized_end=1130
+  _globals['_TASKSUBMITRESPONSE']._serialized_start=1132
+  _globals['_TASKSUBMITRESPONSE']._serialized_end=1185
+  _globals['_TASKRESULTREQUEST']._serialized_start=1187
+  _globals['_TASKRESULTREQUEST']._serialized_end=1223
+  _globals['_TASKRESULTRESPONSE']._serialized_start=1225
+  _globals['_TASKRESULTRESPONSE']._serialized_end=1328
+  _globals['_BATCHCREATEREQUEST']._serialized_start=1331
+  _globals['_BATCHCREATEREQUEST']._serialized_end=1485
+  _globals['_BATCHCREATERESPONSE']._serialized_start=1487
+  _globals['_BATCHCREATERESPONSE']._serialized_end=1560
+  _globals['_BATCHSTATUSREQUEST']._serialized_start=1562
+  _globals['_BATCHSTATUSREQUEST']._serialized_end=1598
+  _globals['_BATCHSTATUSRESPONSE']._serialized_start=1600
+  _globals['_BATCHSTATUSRESPONSE']._serialized_end=1715
+  _globals['_FILEREQUEST']._serialized_start=1717
+  _globals['_FILEREQUEST']._serialized_end=1780
+  _globals['_FILEUPLOADREQUEST']._serialized_start=1782
+  _globals['_FILEUPLOADREQUEST']._serialized_end=1883
+  _globals['_FILEUPLOADRESPONSE']._serialized_start=1885
+  _globals['_FILEUPLOADRESPONSE']._serialized_end=1939
+  _globals['_MODELREGISTERREQUEST']._serialized_start=1942
+  _globals['_MODELREGISTERREQUEST']._serialized_end=2081
+  _globals['_MODELREGISTERREQUEST_INFOENTRY']._serialized_start=2038
+  _globals['_MODELREGISTERREQUEST_INFOENTRY']._serialized_end=2081
+  _globals['_MODELLISTRESPONSE']._serialized_start=2083
+  _globals['_MODELLISTRESPONSE']._serialized_end=2208
+  _globals['_MODELLISTRESPONSE_MODELSENTRY']._serialized_start=2163
+  _globals['_MODELLISTRESPONSE_MODELSENTRY']._serialized_end=2208
+  _globals['_RELAYFRAME']._serialized_start=2211
+  _globals['_RELAYFRAME']._serialized_end=2340
+  _globals['_MASTER']._serialized_start=2343
+  _globals['_MASTER']._serialized_end=3250
+  _globals['_RELAY']._serialized_start=3252
+  _globals['_RELAY']._serialized_end=3322
 # @@protoc_insertion_point(module_scope)

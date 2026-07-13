@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import time
 import uuid
@@ -15,6 +16,37 @@ from .registry import _default_registry as reg
 logger = logging.getLogger("distripute.master")
 
 DATA_DIR = Path.home() / ".cache" / "distripute" / "data"
+
+RELAY_ROUTE_TO_REQUEST = {
+    "register": pb.RegisterRequest,
+    "heartbeat": pb.HeartbeatRequest,
+    "poll": pb.PollRequest,
+    "submit_result": pb.TaskResult,
+}
+RELAY_ROUTE_TO_METHOD = {
+    "register": "Register",
+    "heartbeat": "Heartbeat",
+    "poll": "PollTasks",
+    "submit_result": "SubmitResult",
+}
+RELAY_ROUTE_TO_RESPONSE = {
+    "register": ("register_response", pb.RegisterResponse),
+    "heartbeat": ("heartbeat_response", pb.HeartbeatResponse),
+    "poll": ("poll_response", pb.PollResponse),
+    "submit_result": ("submit_result_ack", pb.Ack),
+}
+
+
+class _RelayAbortError(Exception):
+    def __init__(self, code, details):
+        self.code = code
+        self.details = details
+        super().__init__(f"{code.name}: {details}")
+
+
+class _RelayContext:
+    async def abort(self, code, details):
+        raise _RelayAbortError(code, details)
 
 
 class MasterServicer(rpcmod.MasterServicer):
@@ -60,10 +92,10 @@ class MasterServicer(rpcmod.MasterServicer):
         if time.time() - worker.get("last_seen", 0) > 30:
             return []
 
-        # reclaim tasks from dead workers
+        # Drop stale workers and return their in-flight tasks to the pending queue.
         for w in self.cache.worker_list():
             if time.time() - w.get("_ts", 0) > 30:
-                self.cache.worker_delete(w["id"])
+                self._drop_worker(w["id"])
 
         assigned = []
         assigned_ids = []
@@ -83,6 +115,21 @@ class MasterServicer(rpcmod.MasterServicer):
 
         return assigned
 
+    def _drop_worker(self, worker_id: str):
+        self._requeue_worker_tasks(worker_id)
+        self.cache.worker_delete(worker_id)
+
+    def _requeue_worker_tasks(self, worker_id: str):
+        for task in self.cache.task_list():
+            if task.get("worker_id") != worker_id:
+                continue
+            if task.get("status") != "running":
+                continue
+            task["status"] = "pending"
+            task["worker_id"] = ""
+            self.cache.task_set(task["id"], task)
+            self.cache.pending_push(task["id"])
+
     def _task_to_proto(self, task: dict) -> pb.TaskDef:
         return pb.TaskDef(
             id=task.get("id", ""),
@@ -98,30 +145,34 @@ class MasterServicer(rpcmod.MasterServicer):
     async def SubmitResult(self, request, context):
         tid = request.task_id
         t = self.cache.task_get(tid)
-        if t:
-            t["status"] = "done" if request.success else "failed"
-            t["result"] = request.output
-            t["error"] = request.error
-            t["duration"] = request.duration
-            self.cache.task_set(tid, t)
+        if not t:
+            return pb.Ack(ok=True)
+        if t.get("worker_id", "") != request.worker_id:
+            return pb.Ack(ok=True)
 
-            wid = t.get("worker_id", "")
-            w = self.cache.worker_get(wid)
-            if w:
-                at = max(0, w.get("active_tasks", 0) - 1)
-                self.cache.worker_update(wid, active_tasks=at)
+        t["status"] = "done" if request.success else "failed"
+        t["result"] = request.output
+        t["error"] = request.error
+        t["duration"] = request.duration
+        self.cache.task_set(tid, t)
 
-            jid = t.get("job_id", "")
-            j = self.cache.job_get(jid)
-            if j:
-                if request.success:
-                    j["done"] = j.get("done", 0) + 1
-                else:
-                    j["failed"] = j.get("failed", 0) + 1
-                if j["done"] + j["failed"] >= j["total"]:
-                    j["status"] = "completed"
-                    logger.info(f"batch {jid} done: {j['done']}/{j['total']}")
-                self.cache.job_set(jid, j)
+        wid = t.get("worker_id", "")
+        w = self.cache.worker_get(wid)
+        if w:
+            at = max(0, w.get("active_tasks", 0) - 1)
+            self.cache.worker_update(wid, active_tasks=at)
+
+        jid = t.get("job_id", "")
+        j = self.cache.job_get(jid)
+        if j:
+            if request.success:
+                j["done"] = j.get("done", 0) + 1
+            else:
+                j["failed"] = j.get("failed", 0) + 1
+            if j["done"] + j["failed"] >= j["total"]:
+                j["status"] = "completed"
+                logger.info(f"batch {jid} done: {j['done']}/{j['total']}")
+            self.cache.job_set(jid, j)
 
         return pb.Ack(ok=True)
 
@@ -284,22 +335,79 @@ async def _relay_loop(servicer: MasterServicer, relay_addr: str, network_id: str
         try:
             async with grpc.aio.insecure_channel(relay_addr) as channel:
                 stub = rpcmod.RelayStub(channel)
+                outbound: asyncio.Queue[pb.RelayFrame | None] = asyncio.Queue()
+
                 async def _gen():
-                    yield pb.RelayFrame(
-                        network_id=network_id, sender_id="master",
-                        sender_role="master", routing_key="hello",
-                    )
+                    await outbound.put(pb.RelayFrame(
+                        network_id=network_id,
+                        sender_id="master",
+                        sender_role="master",
+                        routing_key="hello",
+                    ))
                     while True:
-                        await asyncio.sleep(30)
-                        yield pb.RelayFrame(
-                            network_id=network_id, sender_id="master",
-                            sender_role="master", routing_key="ping",
-                        )
+                        frame = await outbound.get()
+                        if frame is None:
+                            return
+                        yield frame
+
                 async for frame in stub.Connect(_gen()):
-                    pass
+                    await _handle_relay_frame(servicer, frame, network_id, outbound)
         except Exception as e:
             logger.warning(f"relay disconnected: {e}")
         await asyncio.sleep(5)
+
+
+async def _handle_relay_frame(
+    servicer: MasterServicer,
+    frame: pb.RelayFrame,
+    network_id: str,
+    outbound: asyncio.Queue[pb.RelayFrame | None],
+):
+    if frame.routing_key == "worker_left":
+        async with servicer._lock:
+            servicer._drop_worker(frame.sender_id)
+        return
+    if frame.routing_key in {"master_left", "hello", "ping"}:
+        return
+
+    request_cls = RELAY_ROUTE_TO_REQUEST.get(frame.routing_key)
+    method_name = RELAY_ROUTE_TO_METHOD.get(frame.routing_key)
+    response_meta = RELAY_ROUTE_TO_RESPONSE.get(frame.routing_key)
+    if not request_cls or not method_name or not response_meta:
+        logger.debug(f"unknown relay frame: {frame.routing_key}")
+        return
+
+    try:
+        request = request_cls.FromString(frame.payload)
+        method = getattr(servicer, method_name)
+        response = await method(request, _RelayContext())
+    except _RelayAbortError as e:
+        logger.warning(f"relay request aborted: {e}")
+        await outbound.put(pb.RelayFrame(
+            network_id=network_id,
+            sender_id="master",
+            sender_role="master",
+            target_id=frame.sender_id,
+            routing_key=f"{frame.routing_key}_error",
+            payload=json.dumps({
+                "code": e.code.name,
+                "message": e.details,
+            }).encode(),
+        ))
+        return
+    except Exception as e:
+        logger.warning(f"relay request failed: {e}")
+        return
+
+    response_key, _ = response_meta
+    await outbound.put(pb.RelayFrame(
+        network_id=network_id,
+        sender_id="master",
+        sender_role="master",
+        target_id=frame.sender_id,
+        routing_key=response_key,
+        payload=response.SerializeToString(),
+    ))
 
 
 @click.command("master")

@@ -87,6 +87,7 @@ class Cache:
     def task_set(self, task_id: str, data: dict):
         if self._use_redis:
             self._r.hset(f"task:{task_id}", mapping={k: _val(v) for k, v in data.items()})
+            self._r.sadd("tasks", task_id)
         else:
             self._local_tasks[task_id] = dict(data)
 
@@ -111,6 +112,26 @@ class Cache:
         if self._use_redis:
             return bool(self._r.exists(f"task:{task_id}"))
         return task_id in self._local_tasks
+
+    def task_delete(self, task_id: str):
+        if self._use_redis:
+            self._r.delete(f"task:{task_id}")
+            self._r.srem("tasks", task_id)
+        else:
+            self._local_tasks.pop(task_id, None)
+
+    def task_list(self) -> list[dict]:
+        if self._use_redis:
+            ids = self._r.smembers("tasks") or set()
+            tasks = []
+            for tid in ids:
+                task = self.task_get(tid)
+                if task:
+                    tasks.append(task)
+                else:
+                    self._r.srem("tasks", tid)
+            return tasks
+        return list(self._local_tasks.values())
 
     # ── Workers ───────────────────────────────────────────
 

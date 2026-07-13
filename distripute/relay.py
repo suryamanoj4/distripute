@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from collections import defaultdict
+from dataclasses import dataclass, field
 
 import click
 import grpc
@@ -10,61 +11,135 @@ from .grpc import pb, grpc as rpcmod
 logger = logging.getLogger("distripute.relay")
 
 
+@dataclass
+class _Peer:
+    network_id: str
+    peer_id: str
+    role: str
+    outbound: asyncio.Queue[pb.RelayFrame | None] = field(default_factory=asyncio.Queue)
+
+
 class RelayServicer(rpcmod.RelayServicer):
     def __init__(self):
-        self._masters: dict[str, grpc.aio.StreamStreamCall] = {}
-        self._workers: dict[str, list[tuple[str, grpc.aio.StreamStreamCall]]] = defaultdict(list)
+        self._masters: dict[str, _Peer] = {}
+        self._workers: dict[str, dict[str, _Peer]] = defaultdict(dict)
         self._lock = asyncio.Lock()
 
     async def Connect(self, request_iterator, context):
         first = await request_iterator.__anext__()
-        network_id = first.network_id
-        sender_id = first.sender_id
-        role = first.sender_role
+        peer = _Peer(
+            network_id=first.network_id,
+            peer_id=first.sender_id,
+            role=first.sender_role,
+        )
 
-        if role == "master":
-            async with self._lock:
-                self._masters[network_id] = context
-            logger.info(f"master registered: {network_id}")
+        await self._register_peer(peer)
+        consumer = asyncio.create_task(self._consume(peer, request_iterator))
+        first_frame = asyncio.create_task(self._route_frame(peer, first))
 
-            async def _from_master():
-                async for frame in request_iterator:
-                    yield frame
-
-            # forward worker messages to master
-            return self._forward_workers_to_master(_from_master(), network_id, context)
-
-        elif role == "worker":
-            async with self._lock:
-                self._workers[network_id].append((sender_id, context))
-            logger.info(f"worker joined: {sender_id} -> network_id={network_id}")
-
-            # notify master
-            async with self._lock:
-                master_ctx = self._masters.get(network_id)
-            if master_ctx:
-                await master_ctx.write(pb.RelayFrame(
-                    network_id=network_id, sender_id=sender_id,
-                    sender_role="worker", routing_key="worker_joined",
-                ))
-
-            return request_iterator
-
-        return request_iterator
-
-    async def _forward_workers_to_master(self, master_iter, network_id, master_ctx):
         try:
-            async for frame in master_iter:
-                pass  # handle master->worker messages
+            async for frame in self._yield_frames(peer):
+                yield frame
         finally:
-            async with self._lock:
-                self._masters.pop(network_id, None)
-                workers = self._workers.pop(network_id, [])
-                for wid, wctx in workers:
-                    await wctx.write(pb.RelayFrame(
-                        network_id=network_id, sender_id=wid,
-                        sender_role="worker", routing_key="worker_left",
-                    ))
+            consumer.cancel()
+            results = await asyncio.gather(consumer, first_frame, return_exceptions=True)
+            for result in results:
+                if result is None or isinstance(result, asyncio.CancelledError):
+                    continue
+                logger.warning(
+                    "relay consumer failed for %s %s on %s: %s",
+                    peer.role,
+                    peer.peer_id,
+                    peer.network_id,
+                    result,
+                )
+            await self._disconnect_peer(peer)
+
+    async def _yield_frames(self, peer: _Peer):
+        while True:
+            frame = await peer.outbound.get()
+            if frame is None:
+                return
+            yield frame
+
+    async def _register_peer(self, peer: _Peer):
+        async with self._lock:
+            if peer.role == "master":
+                self._masters[peer.network_id] = peer
+            elif peer.role == "worker":
+                self._workers[peer.network_id][peer.peer_id] = peer
+            else:
+                raise ValueError(f"unsupported relay role: {peer.role}")
+
+        if peer.role == "master":
+            logger.info(f"master registered: {peer.network_id}")
+        else:
+            logger.info(f"worker joined: {peer.peer_id} -> network_id={peer.network_id}")
+
+    async def _consume(self, peer: _Peer, request_iterator):
+        async for frame in request_iterator:
+            await self._route_frame(peer, frame)
+
+    async def _route_frame(self, peer: _Peer, frame: pb.RelayFrame):
+        if peer.role == "worker":
+            await self._send_to_master(peer.network_id, frame)
+            return
+
+        if frame.target_id:
+            worker = await self._get_worker(peer.network_id, frame.target_id)
+            if worker:
+                await worker.outbound.put(frame)
+            return
+
+        for worker in await self._list_workers(peer.network_id):
+            await worker.outbound.put(frame)
+
+    async def _disconnect_peer(self, peer: _Peer):
+        async with self._lock:
+            if peer.role == "master":
+                current = self._masters.get(peer.network_id)
+                if current is peer:
+                    self._masters.pop(peer.network_id, None)
+                workers = list(self._workers.pop(peer.network_id, {}).values())
+            else:
+                workers = []
+                self._workers[peer.network_id].pop(peer.peer_id, None)
+                if not self._workers[peer.network_id]:
+                    self._workers.pop(peer.network_id, None)
+
+        if peer.role == "master":
+            for worker in workers:
+                await worker.outbound.put(pb.RelayFrame(
+                    network_id=peer.network_id,
+                    sender_id="master",
+                    sender_role="master",
+                    routing_key="master_left",
+                ))
+                await worker.outbound.put(None)
+            logger.info(f"master disconnected: {peer.network_id}")
+            return
+
+        await self._send_to_master(peer.network_id, pb.RelayFrame(
+            network_id=peer.network_id,
+            sender_id=peer.peer_id,
+            sender_role="worker",
+            routing_key="worker_left",
+        ))
+        logger.info(f"worker left: {peer.peer_id} -> network_id={peer.network_id}")
+
+    async def _send_to_master(self, network_id: str, frame: pb.RelayFrame):
+        async with self._lock:
+            master = self._masters.get(network_id)
+        if master:
+            await master.outbound.put(frame)
+
+    async def _get_worker(self, network_id: str, worker_id: str) -> _Peer | None:
+        async with self._lock:
+            return self._workers.get(network_id, {}).get(worker_id)
+
+    async def _list_workers(self, network_id: str) -> list[_Peer]:
+        async with self._lock:
+            return list(self._workers.get(network_id, {}).values())
 
 
 async def serve(host="0.0.0.0", port=9091):

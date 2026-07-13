@@ -80,6 +80,7 @@ message TaskResult {
   string output = 3;
   string error = 4;
   double duration = 5;
+  string worker_id = 6;
 }
 
 // ── Task Submission (Client → Master) ────────────────────
