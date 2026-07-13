@@ -122,14 +122,85 @@ class TestMasterGRPC:
         await stub.SubmitTask(pb.TaskSubmit(
             network_id=network_id, task_id="t3", func_name="fn", source="",
         ))
+        await stub.Register(pb.RegisterRequest(network_id=network_id, worker_id="w1"))
+        await stub.PollTasks(pb.PollRequest(worker_id="w1", max_tasks=1))
         resp = await stub.SubmitResult(pb.TaskResult(
-            task_id="t3", success=True, output="hello", duration=1.0,
+            task_id="t3", success=True, output="hello", duration=1.0, worker_id="w1",
         ))
         assert resp.ok
 
         r = await stub.GetTaskResult(pb.TaskResultRequest(task_id="t3"))
         assert r.status == "done"
         assert r.result == "hello"
+
+    async def test_submit_result_ignores_stale_worker(self, stub, network_id):
+        await stub.SubmitTask(pb.TaskSubmit(
+            network_id=network_id, task_id="t-stale", func_name="fn", source="",
+        ))
+        await stub.Register(pb.RegisterRequest(network_id=network_id, worker_id="w1"))
+        await stub.Register(pb.RegisterRequest(network_id=network_id, worker_id="w2"))
+
+        first = await stub.PollTasks(pb.PollRequest(worker_id="w1", max_tasks=1))
+        assert [task.id for task in first.tasks] == ["t-stale"]
+
+        await stub.Heartbeat(pb.HeartbeatRequest(worker_id="w1"))
+        await stub.Heartbeat(pb.HeartbeatRequest(worker_id="w2"))
+        await stub.SubmitResult(pb.TaskResult(
+            task_id="t-stale",
+            success=True,
+            output="late",
+            duration=1.0,
+            worker_id="w2",
+        ))
+
+        result = await stub.GetTaskResult(pb.TaskResultRequest(task_id="t-stale"))
+        assert result.status == "running"
+        assert result.worker_id == "w1"
+        assert result.result == ""
+
+    async def test_submit_result_ignores_result_after_reassignment(self, servicer, stub, network_id):
+        await stub.SubmitTask(pb.TaskSubmit(
+            network_id=network_id, task_id="t-reassigned", func_name="fn", source="",
+        ))
+        await stub.Register(pb.RegisterRequest(network_id=network_id, worker_id="w1"))
+        await stub.Register(pb.RegisterRequest(network_id=network_id, worker_id="w2"))
+
+        first = await stub.PollTasks(pb.PollRequest(worker_id="w1", max_tasks=1))
+        assert [task.id for task in first.tasks] == ["t-reassigned"]
+
+        servicer.cache._local_workers["w1"]["_ts"] = time.time() - 31
+        servicer.cache._local_workers["w1"]["last_seen"] = time.time() - 31
+
+        second = await stub.PollTasks(pb.PollRequest(worker_id="w2", max_tasks=1))
+        assert [task.id for task in second.tasks] == ["t-reassigned"]
+
+        stale = await stub.SubmitResult(pb.TaskResult(
+            task_id="t-reassigned",
+            success=True,
+            output="late",
+            duration=1.0,
+            worker_id="w1",
+        ))
+        assert stale.ok
+
+        result = await stub.GetTaskResult(pb.TaskResultRequest(task_id="t-reassigned"))
+        assert result.status == "running"
+        assert result.worker_id == "w2"
+        assert result.result == ""
+
+        fresh = await stub.SubmitResult(pb.TaskResult(
+            task_id="t-reassigned",
+            success=True,
+            output="fresh",
+            duration=1.0,
+            worker_id="w2",
+        ))
+        assert fresh.ok
+
+        done = await stub.GetTaskResult(pb.TaskResultRequest(task_id="t-reassigned"))
+        assert done.status == "done"
+        assert done.result == "fresh"
+        assert done.worker_id == "w2"
 
     async def test_create_batch(self, stub, network_id):
         resp = await stub.CreateBatch(pb.BatchCreateRequest(

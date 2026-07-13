@@ -145,30 +145,34 @@ class MasterServicer(rpcmod.MasterServicer):
     async def SubmitResult(self, request, context):
         tid = request.task_id
         t = self.cache.task_get(tid)
-        if t:
-            t["status"] = "done" if request.success else "failed"
-            t["result"] = request.output
-            t["error"] = request.error
-            t["duration"] = request.duration
-            self.cache.task_set(tid, t)
+        if not t:
+            return pb.Ack(ok=True)
+        if t.get("worker_id", "") != request.worker_id:
+            return pb.Ack(ok=True)
 
-            wid = t.get("worker_id", "")
-            w = self.cache.worker_get(wid)
-            if w:
-                at = max(0, w.get("active_tasks", 0) - 1)
-                self.cache.worker_update(wid, active_tasks=at)
+        t["status"] = "done" if request.success else "failed"
+        t["result"] = request.output
+        t["error"] = request.error
+        t["duration"] = request.duration
+        self.cache.task_set(tid, t)
 
-            jid = t.get("job_id", "")
-            j = self.cache.job_get(jid)
-            if j:
-                if request.success:
-                    j["done"] = j.get("done", 0) + 1
-                else:
-                    j["failed"] = j.get("failed", 0) + 1
-                if j["done"] + j["failed"] >= j["total"]:
-                    j["status"] = "completed"
-                    logger.info(f"batch {jid} done: {j['done']}/{j['total']}")
-                self.cache.job_set(jid, j)
+        wid = t.get("worker_id", "")
+        w = self.cache.worker_get(wid)
+        if w:
+            at = max(0, w.get("active_tasks", 0) - 1)
+            self.cache.worker_update(wid, active_tasks=at)
+
+        jid = t.get("job_id", "")
+        j = self.cache.job_get(jid)
+        if j:
+            if request.success:
+                j["done"] = j.get("done", 0) + 1
+            else:
+                j["failed"] = j.get("failed", 0) + 1
+            if j["done"] + j["failed"] >= j["total"]:
+                j["status"] = "completed"
+                logger.info(f"batch {jid} done: {j['done']}/{j['total']}")
+            self.cache.job_set(jid, j)
 
         return pb.Ack(ok=True)
 
@@ -363,7 +367,7 @@ async def _handle_relay_frame(
         async with servicer._lock:
             servicer._drop_worker(frame.sender_id)
         return
-    if frame.routing_key in {"worker_joined", "master_left", "hello", "ping"}:
+    if frame.routing_key in {"master_left", "hello", "ping"}:
         return
 
     request_cls = RELAY_ROUTE_TO_REQUEST.get(frame.routing_key)

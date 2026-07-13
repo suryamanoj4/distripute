@@ -74,12 +74,6 @@ class RelayServicer(rpcmod.RelayServicer):
             logger.info(f"master registered: {peer.network_id}")
         else:
             logger.info(f"worker joined: {peer.peer_id} -> network_id={peer.network_id}")
-            await self._send_to_master(peer.network_id, pb.RelayFrame(
-                network_id=peer.network_id,
-                sender_id=peer.peer_id,
-                sender_role="worker",
-                routing_key="worker_joined",
-            ))
 
     async def _consume(self, peer: _Peer, request_iterator):
         async for frame in request_iterator:

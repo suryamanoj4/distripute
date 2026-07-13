@@ -104,7 +104,12 @@ async def _download_file(channel, job_id: str, filename: str, dest: Path) -> str
     return str(filepath)
 
 
-async def _execute_task(task: pb.TaskDef, channel=None, allow_file_download: bool = True) -> pb.TaskResult:
+async def _execute_task(
+    task: pb.TaskDef,
+    channel=None,
+    allow_file_download: bool = True,
+    worker_id: str = "",
+) -> pb.TaskResult:
     file_path = ""
     if task.filename and task.file_size > 0:
         if not allow_file_download or channel is None:
@@ -114,6 +119,7 @@ async def _execute_task(task: pb.TaskDef, channel=None, allow_file_download: boo
                 output="",
                 error=RELAY_UNSUPPORTED_FILE_ERROR,
                 duration=0.0,
+                worker_id=worker_id,
             )
         dest = TASK_CACHE / task.job_id
         dest.mkdir(parents=True, exist_ok=True)
@@ -133,6 +139,7 @@ async def _execute_task(task: pb.TaskDef, channel=None, allow_file_download: boo
         output=str(result["output"]),
         error=result.get("error", ""),
         duration=result.get("duration", 0.0),
+        worker_id=worker_id,
     )
 
 
@@ -142,7 +149,11 @@ async def _run_relay_task(
     network_id: str,
     worker_id: str,
 ):
-    result = await _execute_task(relay_task, allow_file_download=False)
+    result = await _execute_task(
+        relay_task,
+        allow_file_download=False,
+        worker_id=worker_id,
+    )
     await outbound.put(pb.RelayFrame(
         network_id=network_id,
         sender_id=worker_id,
@@ -248,7 +259,12 @@ async def run_worker(master_addr="", relay_addr="", network_id="", supported_mod
                 try:
                     resp = await stub.PollTasks(pb.PollRequest(worker_id=wid, max_tasks=1))
                     for task in resp.tasks:
-                        result = await _execute_task(task, channel=channel, allow_file_download=True)
+                        result = await _execute_task(
+                            task,
+                            channel=channel,
+                            allow_file_download=True,
+                            worker_id=wid,
+                        )
                         await stub.SubmitResult(result)
                 except Exception as e:
                     logger.debug(f"poll error: {e}")
