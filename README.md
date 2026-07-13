@@ -100,7 +100,7 @@ See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the full deep dive — gRPC servi
 
 ```bash
 uv sync
-uv run pytest              # 28 tests
+uv run pytest              # 37 tests
 uv run python -m grpc_tools.protoc -I proto --python_out=distripute/grpc --grpc_python_out=distripute/grpc proto/distripute.proto  # Regenerate protobuf
 ```
 
