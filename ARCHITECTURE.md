@@ -174,7 +174,7 @@ User Script                     Master                    Worker
 
 - Workers heartbeat every 10s
 - Master drops workers after 30s of no heartbeat
-- Tasks assigned to dead workers stay in `_pending` (TODO: re-queue on disconnect)
+- Tasks assigned to dead workers are re-queued for re-assignment
 - No checkpoint/restart (in-memory state)
 
 ---
@@ -298,7 +298,7 @@ distripute master --redis redis://localhost:6379
 
 ### Cache fallback
 
-When no `--redis` URL is provided, `Cache` uses Python dicts/lists. Same API, same behavior — no Redis required for development or single-node testing. All 28 tests run without Redis.
+When no `--redis` URL is provided, `Cache` uses Python dicts/lists. Same API, same behavior — no Redis required for development or single-node testing. All tests run without Redis.
 
 ## 6. Worker Execution Environment
 
