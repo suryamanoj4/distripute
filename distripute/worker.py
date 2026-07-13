@@ -41,6 +41,8 @@ except Exception:
     pass
 
 TASK_CACHE = Path.home() / ".cache" / "distripute" / "tasks"
+RELAY_UNSUPPORTED_FILE_ERROR = "relay mode does not yet support file-backed task transfer"
+RELAY_REGISTER_TIMEOUT = 5.0
 
 
 async def _run_with_uv(source: str, func_name: str, payload: bytes,
@@ -102,9 +104,118 @@ async def _download_file(channel, job_id: str, filename: str, dest: Path) -> str
     return str(filepath)
 
 
+async def _execute_task(task: pb.TaskDef, channel=None, allow_file_download: bool = True) -> pb.TaskResult:
+    file_path = ""
+    if task.filename and task.file_size > 0:
+        if not allow_file_download or channel is None:
+            return pb.TaskResult(
+                task_id=task.id,
+                success=False,
+                output="",
+                error=RELAY_UNSUPPORTED_FILE_ERROR,
+                duration=0.0,
+            )
+        dest = TASK_CACHE / task.job_id
+        dest.mkdir(parents=True, exist_ok=True)
+        file_path = await _download_file(channel, task.job_id, task.filename, dest)
+
+    result = await _run_with_uv(
+        task.source,
+        task.func_name,
+        task.payload,
+        list(task.requirements),
+        task.filename,
+        file_path,
+    )
+    return pb.TaskResult(
+        task_id=task.id,
+        success=result["success"],
+        output=str(result["output"]),
+        error=result.get("error", ""),
+        duration=result.get("duration", 0.0),
+    )
+
+
+async def _run_relay_task(
+    relay_task: pb.TaskDef,
+    outbound: asyncio.Queue[pb.RelayFrame | None],
+    network_id: str,
+    worker_id: str,
+):
+    result = await _execute_task(relay_task, allow_file_download=False)
+    await outbound.put(pb.RelayFrame(
+        network_id=network_id,
+        sender_id=worker_id,
+        sender_role="worker",
+        routing_key="submit_result",
+        payload=result.SerializeToString(),
+    ))
+
+
+def _track_background_task(task_set: set[asyncio.Task], task: asyncio.Task):
+    task_set.add(task)
+
+    def _cleanup(done: asyncio.Task):
+        task_set.discard(done)
+        try:
+            exc = done.exception()
+        except asyncio.CancelledError:
+            return
+        if exc is not None:
+            logger.warning(f"relay task execution failed: {exc}")
+
+    task.add_done_callback(_cleanup)
+    return task
+
+
+async def _handle_relay_frame(
+    frame: pb.RelayFrame,
+    *,
+    outbound: asyncio.Queue[pb.RelayFrame | None],
+    network_id: str,
+    worker_id: str,
+    registered: asyncio.Event,
+    inflight_tasks: set[asyncio.Task],
+):
+    if frame.routing_key == "poll_response":
+        resp = pb.PollResponse.FromString(frame.payload)
+        for relay_task in resp.tasks:
+            task = asyncio.create_task(_run_relay_task(
+                relay_task,
+                outbound,
+                network_id,
+                worker_id,
+            ))
+            _track_background_task(inflight_tasks, task)
+        return None
+
+    if frame.routing_key == "register_response":
+        resp = pb.RegisterResponse.FromString(frame.payload)
+        registered.set()
+        logger.info(f"registered as {resp.worker_id} via relay")
+        return None
+
+    if frame.routing_key == "register_error":
+        try:
+            payload = json.loads(frame.payload.decode() or "{}")
+        except json.JSONDecodeError:
+            payload = {"message": frame.payload.decode(errors="replace")}
+        message = payload.get("message", "registration failed")
+        code = payload.get("code", "UNKNOWN")
+        logger.error(f"relay registration failed ({code}): {message}")
+        return "register_error"
+
+    if frame.routing_key == "master_left":
+        logger.warning("master disconnected from relay")
+        return "master_left"
+
+    return None
+
+
 async def run_worker(master_addr="", relay_addr="", network_id="", supported_models=None):
     wid = uuid.uuid4().hex[:8]
     logger.info(f"worker {wid} starting (hw={HARDWARE}, gpus={GPU_COUNT})")
+    TASK_CACHE.mkdir(parents=True, exist_ok=True)
 
     if master_addr:
         async with grpc.aio.insecure_channel(master_addr) as channel:
@@ -137,22 +248,8 @@ async def run_worker(master_addr="", relay_addr="", network_id="", supported_mod
                 try:
                     resp = await stub.PollTasks(pb.PollRequest(worker_id=wid, max_tasks=1))
                     for task in resp.tasks:
-                        file_path = ""
-                        if task.filename and task.file_size > 0:
-                            dest = TASK_CACHE / task.job_id
-                            dest.mkdir(parents=True, exist_ok=True)
-                            file_path = await _download_file(channel, task.job_id, task.filename, dest)
-
-                        result = await _run_with_uv(
-                            task.source, task.func_name, task.payload,
-                            list(task.requirements), task.filename, file_path,
-                        )
-                        await stub.SubmitResult(pb.TaskResult(
-                            task_id=task.id, success=result["success"],
-                            output=str(result["output"]),
-                            error=result.get("error", ""),
-                            duration=result.get("duration", 0.0),
-                        ))
+                        result = await _execute_task(task, channel=channel, allow_file_download=True)
+                        await stub.SubmitResult(result)
                 except Exception as e:
                     logger.debug(f"poll error: {e}")
                 await asyncio.sleep(1)
@@ -160,27 +257,103 @@ async def run_worker(master_addr="", relay_addr="", network_id="", supported_mod
     elif relay_addr:
         logger.info(f"connecting to relay at {relay_addr}")
         while True:
+            heartbeat_task = None
+            poll_task = None
+            register_timeout_task = None
+            inflight_tasks: set[asyncio.Task] = set()
+            fatal_registration_error = False
             try:
                 async with grpc.aio.insecure_channel(relay_addr) as channel:
                     stub = rpcmod.RelayStub(channel)
+                    outbound: asyncio.Queue[pb.RelayFrame | None] = asyncio.Queue()
+                    registered = asyncio.Event()
+
                     async def _gen():
-                        yield pb.RelayFrame(
+                        await outbound.put(pb.RelayFrame(
                             network_id=network_id, sender_id=wid,
                             sender_role="worker", routing_key="register",
-                        )
+                            payload=pb.RegisterRequest(
+                                network_id=network_id, worker_id=wid,
+                                cpu_cores=CPU_CORES, ram_bytes=RAM_BYTES,
+                                gpu_count=GPU_COUNT, gpu_mem_bytes=GPU_MEM,
+                                hardware=HARDWARE, supported_models=supported_models or [],
+                            ).SerializeToString(),
+                        ))
+                        while True:
+                            frame = await outbound.get()
+                            if frame is None:
+                                return
+                            yield frame
+
+                    async def _registration_timeout():
+                        await asyncio.sleep(RELAY_REGISTER_TIMEOUT)
+                        if not registered.is_set():
+                            logger.error("relay registration timed out")
+                            await channel.close()
+
+                    async def _heartbeat():
+                        await registered.wait()
                         while True:
                             await asyncio.sleep(10)
-                            yield pb.RelayFrame(
-                                network_id=network_id, sender_id=wid,
-                                sender_role="worker", routing_key="heartbeat",
-                            )
+                            await outbound.put(pb.RelayFrame(
+                                network_id=network_id,
+                                sender_id=wid,
+                                sender_role="worker",
+                                routing_key="heartbeat",
+                                payload=pb.HeartbeatRequest(worker_id=wid).SerializeToString(),
+                            ))
+
+                    async def _poll():
+                        await registered.wait()
+                        while True:
+                            if inflight_tasks:
+                                await asyncio.sleep(0.1)
+                                continue
+                            await outbound.put(pb.RelayFrame(
+                                network_id=network_id,
+                                sender_id=wid,
+                                sender_role="worker",
+                                routing_key="poll",
+                                payload=pb.PollRequest(worker_id=wid, max_tasks=1).SerializeToString(),
+                            ))
+                            await asyncio.sleep(1)
+
+                    register_timeout_task = asyncio.create_task(_registration_timeout())
+                    heartbeat_task = asyncio.create_task(_heartbeat())
+                    poll_task = asyncio.create_task(_poll())
 
                     async for frame in stub.Connect(_gen()):
-                        if frame.routing_key == "task":
-                            # receive task via relay
-                            pass
+                        outcome = await _handle_relay_frame(
+                            frame,
+                            outbound=outbound,
+                            network_id=network_id,
+                            worker_id=wid,
+                            registered=registered,
+                            inflight_tasks=inflight_tasks,
+                        )
+                        if outcome in {"register_error", "master_left"}:
+                            fatal_registration_error = outcome == "register_error"
+                            break
             except Exception as e:
                 logger.warning(f"relay disconnected: {e}")
+            finally:
+                for task in (register_timeout_task, heartbeat_task, poll_task, *list(inflight_tasks)):
+                    if task:
+                        task.cancel()
+                if register_timeout_task or heartbeat_task or poll_task or inflight_tasks:
+                    await asyncio.gather(
+                        *(
+                            task for task in (
+                                register_timeout_task,
+                                heartbeat_task,
+                                poll_task,
+                                *list(inflight_tasks),
+                            ) if task is not None
+                        ),
+                        return_exceptions=True,
+                    )
+            if fatal_registration_error:
+                return
             await asyncio.sleep(5)
 
 
